@@ -1,28 +1,59 @@
----
-<p align="center">
-<a href="https://addons.mozilla.org/en-US/firefox/addon/modern-boomslider/"><img src="https://user-images.githubusercontent.com/585534/107280546-7b9b2a00-6a26-11eb-8f9f-f95932f4bfec.png" alt="Get Volume Control for Firefox"></a>
-</p>
----
+# BoomSlider - Modern Volume Booster
 
-Main Changes -
-Modernised UI,
-Changes branding a bit
-cleaned up the css code
+## Description
 
-⚠ Important: To add functionality to more websites, the permission "all_urls" was necessary, however with the recent update to manifest v3, it's optional. If the extension can't access audio on a certain site do the following: Right click the extension, click "manage extension", click the permission tab, allow "Access your data for all websites". This is a necessary permission to access iframes. The extension is open source and fully adheres to this repository. There's no form of analytics in this extension. So don't be afraid of the permissions.
+Lean Dark+ is the minimalist dark mode extension that delivers clean, accurate theming with near‑zero clutter for focused readers, developers, and night‑owls—unlike heavy, option‑dense alternatives that slow the browsing experience.
+## Links
 
-Supports HTML5 video and audio only (no Flash).
+*   [GitHub Repository](https://github.com/moodynooby/modern-vol-booster)
+* [Download For Firefox at AMO](https://addons.mozilla.org/en-US/firefox/addon/modern-boomslider/)
 
-License: MIT
+## Features
 
-Permission to use, copy, modify, and distribute this software for any
-purpose with or without fee is hereby granted, provided that the above
-copyright notice and this permission notice appear in all copies.
+*   **Extreme Volume Control**: Boost volume up to 600% or reduce it significantly below 100%.
+*   **Per-Tab Control**: Adjust volume for individual tabs.
+*   **Intuitive Popup Interface**: Easy volume control via a slider.
+*   **Persistent Settings**: Volume settings remembered for each tab.
+*   **Options Page**: Customize additional settings.
+*   **Keyboard Shortcut**: Quickly open volume control.
+*   **Wide Compatibility**: Works across all websites.
 
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+## Demo / Screenshots
+![
+First
+](https://addons.mozilla.org/user-media/previews/full/333/333717.png?modified=1756722002)
+
+![Second](https://addons.mozilla.org/user-media/previews/full/333/333716.png?modified=1756721999)
+## Setup
+
+BoomSlider is a browser extension. You can install it by loading it unpacked in your browser's extension settings.
+
+### For Chrome/Brave/Edge:
+
+1.  Download the repository as a ZIP file and extract it to a folder.
+2.  Open your browser and navigate to `chrome://extensions`.
+3.  Enable "Developer mode" in the top-right corner.
+4.  Click on "Load unpacked" and select the extracted folder.
+5.  The BoomSlider icon should now appear in your browser's toolbar.
+
+### For Firefox:
+
+1.  Download the repository as a ZIP file and extract it to a folder.
+2.  Open Firefox and navigate to `about:debugging#/runtime/this-firefox`.
+3.  Click "Load Temporary Add-on..." and select any file inside the extracted folder (e.g., `manifest.json`).
+4.  The BoomSlider icon should appear in your toolbar. Note: Temporary add-ons are removed when Firefox closes. For permanent installation, you might need to sign the extension.
+
+### Usage
+
+1.  **Open the Popup**: Click on the BoomSlider icon in your browser's toolbar.
+2.  **Adjust Volume**: Use the slider in the popup to increase or decrease the volume for the current tab.
+3.  **Options Page**: Right-click the extension icon and select "Options" to configure additional settings (if any).
+4.  **Keyboard Shortcut**: Use the configured keyboard shortcut (default is `Ctrl+Shift+F` on some browsers, or `Cmd+Shift+F` on macOS) to quickly open the volume control popup.
+
+## Release Notes
+
+(No specific release notes available yet.)
+
+## License
+
+This project is open-source licensed under MIT.
