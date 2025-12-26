@@ -1,260 +1,330 @@
-var tc = {
+const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
+
+const tc = {
   settings: {
-    logLevel: 0,
-    defaultLogLevel: 4,
+    logLevel: 4,
+    debugMode: false
   },
   vars: {
     dB: 0,
     mono: false,
-    audioCtx: new (window.AudioContext || window.webkitAudioContext)(),
+    audioCtx: undefined,
     gainNode: undefined,
-  },
+    isBlocked: false
+  }
 };
 
 const logTypes = ["ERROR", "WARNING", "INFO", "DEBUG"];
+function log(msg, level = 4) {
+  if (tc.settings.logLevel >= level) console.log(`[VolumeControl] ${logTypes[level-2]}: ${msg}`);
+}
 
-function log(message, level = tc.settings.defaultLogLevel) {
-  if (tc.settings.logLevel >= level) {
-    console.log(`${logTypes[level - 2]}: ${message}`);
-  }
+if (browserAPI) {
+    browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+        if (tc.vars.isBlocked) return;
+        switch (msg.command) {
+            case "checkExclusion":
+                sendResponse({ status: "active" });
+                break;
+            case "setVolume":
+                tc.vars.dB = msg.dB;
+                applyState();
+                sendResponse({});
+                break;
+            case "getVolume":
+                sendResponse({ response: tc.vars.dB });
+                break;
+            case "setMono":
+                tc.vars.mono = msg.mono;
+                applyState();
+                sendResponse({});
+                break;
+            case "getMono":
+                sendResponse({ response: tc.vars.mono });
+                break;
+        }
+        return true;
+    });
+}
+
+function getGainValue(dB) {
+    const n = Number(dB);
+    if (Number.isNaN(n)) return 1.0;
+    return Math.pow(10, n / 20);
+}
+
+function applyState() {
+    const audioCtx = tc.vars.audioCtx;
+    const gainNode = tc.vars.gainNode;
+    const targetGain = getGainValue(tc.vars.dB);
+
+    if (gainNode && audioCtx) {
+        const now = audioCtx.currentTime;
+        gainNode.gain.value = targetGain;
+
+        if (audioCtx.state === 'running') {
+            try {
+                gainNode.gain.cancelScheduledValues(now);
+                gainNode.gain.setValueAtTime(targetGain, now);
+            } catch (e) {
+                if (tc.settings.debugMode) log(`applyState schedule failed: ${e.message}`, 2);
+            }
+        }
+
+        if (tc.vars.mono) {
+            gainNode.channelCountMode = "explicit";
+            gainNode.channelCount = 1;
+        } else {
+            gainNode.channelCountMode = "max";
+            gainNode.channelCount = 2;
+        }
+    }
+
+    // Also update any fallback elements where we couldn't hook into WebAudio
+    try {
+        for (const el of document.querySelectorAll('audio, video')) {
+            if (el.dataset.vcFallback === 'true') {
+                try {
+                    const gain = targetGain;
+                    const newVol = Math.min(1, Math.max(0, gain));
+                    el.volume = newVol;
+                } catch (e) {
+                    if (tc.settings.debugMode) log(`applyState fallback update failed: ${e.message}`, 3);
+                }
+            }
+        }
+    } catch (e) {
+        if (tc.settings.debugMode) log(`applyState fallback loop failed: ${e.message}`, 3);
+    }
+}
+
+function createGainNode() {
+    if (!tc.vars.audioCtx) return;
+
+    if (!tc.vars.gainNode) {
+        tc.vars.gainNode = tc.vars.audioCtx.createGain();
+        tc.vars.gainNode.channelInterpretation = "speakers";
+    }
+    applyState();
 }
 
 function connectOutput(element) {
-  log("Begin connectOutput", 5);
-  log(`Element found ${element.toString()}`, 5);
-  tc.vars.audioCtx.createMediaElementSource(element).connect(tc.vars.gainNode);
-  tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
-  log("End connectOutput", 5);
-}
+    if (element.dataset.vcHooked === "true") return;
 
-function setVolume(dB) {
-  tc.vars.gainNode.gain.value = Math.pow(10, dB / 20);
-}
-
-function enableMono() {
-  tc.vars.mono = true;
-  tc.vars.gainNode.channelCountMode = "explicit";
-  tc.vars.gainNode.channelCount = 1;
-}
-
-function disableMono() {
-  tc.vars.mono = false;
-  tc.vars.gainNode.channelCountMode = "max";
-  tc.vars.gainNode.channelCount = 2;
-}
-
-function init(document) {
-  log("Begin init", 5);
-  if (!document.body || 
-      document.body.classList.contains("volumecontrol-initialized") || 
-      sessionStorage.getItem('volumecontrol-excluded') === 'true') {
-    log("Skipping initialization", 5);
-    return;
-  }
-  if (!tc.vars.audioCtx) {
-    tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  tc.vars.gainNode = tc.vars.audioCtx.createGain();
-  tc.vars.gainNode.channelInterpretation = "speakers";
-  document.querySelectorAll("audio, video").forEach(connectOutput);
-  document.arrive?.("audio, video", function (newElem) {
-    connectOutput(newElem);
-  });
-
-  document.addEventListener("click", function () {
-    if (tc.vars.audioCtx && 
-        tc.vars.audioCtx.state === "suspended" && 
-        sessionStorage.getItem('volumecontrol-excluded') !== 'true') {
-      tc.vars.audioCtx.resume();
-    }
-  });
-
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    switch (message.command) {
-      case "setVolume":
-        tc.vars.dB = message.dB;
-        setVolume(message.dB);
-        break;
-      case "getVolume":
-        sendResponse({ response: tc.vars.dB });
-        break;
-      case "setMono":
-        if (message.mono) {
-          enableMono();
-        } else {
-          disableMono();
-        }
-        break;
-      case "getMono":
-        sendResponse({ response: tc.vars.mono });
-        break;
-    }
-  });
-  document.body.classList.add("volumecontrol-initialized");
-  log("End init", 5);
-}
-
-function initWhenReady(document) {
-  log("Begin initWhenReady", 5);
-  window.onload = () => {
     if (!tc.vars.audioCtx) {
-      tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    init(window.document);
-  };
-  if (document) {
-    if (document.readyState === "complete") {
-      if (!tc.vars.audioCtx) {
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      init(document);
-    } else {
-      document.onreadystatechange = () => {
-        if (document.readyState === "complete") {
-          if (!tc.vars.audioCtx) {
-            tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          }
-          init(document);
-        }
-      };
+        tc.vars.audioCtx.onstatechange = () => {
+            if (tc.vars.audioCtx.state === 'running') applyState();
+        };
     }
-  }
-  log("End initWhenReady", 5);
-}
+
+    if (!tc.vars.gainNode) createGainNode();
+
+    try {
+        log(`Attempting hook: ${element.tagName} id=${element.id || ''} src=${element.currentSrc || element.src || ''}`, 4);
+        let source = null;
+
+        if (typeof element.wrappedJSObject !== 'undefined') {
+            try {
+                source = tc.vars.audioCtx.createMediaElementSource(element.wrappedJSObject);
+            } catch (e) {
+                log(`Unwrap failed: ${e && e.message}`, 3);
+            }
+        }
+
+        if (!source) {
+            try {
+                source = tc.vars.audioCtx.createMediaElementSource(element);
+            } catch (e) {
+                // createMediaElementSource can fail if the element is already connected elsewhere or due to browser restrictions
+                log(`createMediaElementSource failed: ${e && e.message}`, 2);
+                source = null;
+            }
+        }
+
+        if (source) {
+            source.connect(tc.vars.gainNode);
+            tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
+
+            element.dataset.vcHooked = "true";
+            // Remove any fallback adjustments we may have made earlier
+            if (element.dataset.vcFallback === 'true') {
+                try {
+                    if (element.__vc_originalVolume !== undefined) element.volume = element.__vc_originalVolume;
+                } catch (e) {}
+                delete element.__vc_originalVolume;
+                delete element.dataset.vcFallback;
+            }
+
+            applyState();
+
+            if (tc.settings.debugMode) element.style.border = "2px solid #00ff00";
+            else element.style.border = "";
+            log("Hook Success!", 4);
+        } else {
+            // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
+            if (element.dataset.vcFallback !== 'true') {
+                try {
+                    element.__vc_originalVolume = element.volume;
+                } catch (e) {}
+                element.dataset.vcFallback = 'true';
+            }
+            // Apply current state to fallback element
+            try {
+                const gain = getGainValue(tc.vars.dB);
+                // map gain to 0..1 for element.volume (best-effort)
+                const newVol = Math.min(1, Math.max(0, gain));
+                element.volume = newVol;
+                if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
+            } catch (e) {
+                log(`Fallback volume set failed: ${e && e.message}`, 2);
+            }
+            log("Hook fallback applied (element.volume scaled)", 3);
+        }
+
+    } catch (e) {
+        log(`connectOutput outer failure: ${e && e.message}`, 1);
+        if (tc.settings.debugMode) element.style.border = "5px solid red";
+    }
+} 
+
+function init() {
+    if (document.body.classList.contains("vc-init")) return;
+
+    for (const el of document.querySelectorAll("audio, video")) connectOutput(el);
+
+    new MutationObserver(mutations => {
+        for (const m of mutations) {
+            for (const n of m.addedNodes) {
+                if (n.nodeType === 1) {
+                    if (n.tagName === 'AUDIO' || n.tagName === 'VIDEO') connectOutput(n);
+                    else if (n.querySelectorAll) for (const el of n.querySelectorAll('audio, video')) connectOutput(el);
+
+                    // Also check for media elements inside shadow roots (YouTube may use shadow DOM-ish patterns)
+                    try {
+                        if (n.shadowRoot && n.shadowRoot.querySelectorAll) {
+                            for (const el of n.shadowRoot.querySelectorAll('audio, video')) connectOutput(el);
+                        }
+                    } catch (e) {}
+                }
+            }
+        }
+    }).observe(document.body, { childList: true, subtree: true });
+
+    document.addEventListener('click', () => {
+        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') tc.vars.audioCtx.resume().then(applyState);
+    }, { passive: true });
+
+    document.body.classList.add("vc-init");
+} 
 
 function extractRootDomain(url) {
-  let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-  domain = domain.split('/')[0];
-  domain = domain.split(':')[0];
-  return domain.toLowerCase();
-}
+    if (!url) return "";
+    let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
+    domain = domain.split('/')[0].split(':')[0];
+    return domain.toLowerCase();
+} 
 
-function isValidURL(urlString) {
-  const urlFqdnRegex = /^((https?|ftp):\/\/)?([a-z0-9-\*\.]+\.[a-z\*]+)(:[0-9\*]{1,5})?(\/.*)?$/i;
-  return urlFqdnRegex.test(urlString);
-}
+function start() {
+    if (!browserAPI) return;
 
-function initializeFqdnList() {
-  const defaultFqdns = ["shadertoy.com", "clips.twitch.tv", "www.twitch.tv/*/clip/*"];
-  browser.storage.local.get({ fqdns: [] }).then(data => {
-    const { fqdns } = data;
-    const updatedFqdns = [...new Set([...fqdns, ...defaultFqdns])];
-    if (updatedFqdns.length > fqdns.length) {
-      browser.storage.local.set({ fqdns: updatedFqdns }).then(() => {
-        log("FQDN list initialized/updated", 5);
-        updateFqdnList();
-      });
-    }
-  });
-}
+    browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false }, (data) => {
+        if (browserAPI.runtime.lastError) return;
 
-function checkExclusion() {
-  initializeFqdnList();
+        if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
 
-  browser.storage.local.get({ fqdns: [] }).then(data => {
-    const currentUrl = new URL(window.location.href);
-    const fqdn = extractRootDomain(currentUrl.href);
+        const currentDomain = extractRootDomain(window.location.href);
 
-    // Store exclusion state in session storage
-    if (currentUrl.hostname === "clips.twitch.tv" || 
-        currentUrl.pathname.includes("/clip/") ||
-        isFdqnBlacklisted(fqdn, data.fqdns)) {
-      sessionStorage.setItem('volumecontrol-excluded', 'true');
-      browser.runtime.sendMessage({ type: "exclusion" });
-      return;
-    }
+        // Debug: show state used to decide blocking
+        if (tc.settings.debugMode) {
+            log(`start(): domain=${currentDomain} whitelistMode=${data.whitelistMode} fqdns=[${(data.fqdns||[]).slice(0,5).join(',')}] siteSettingsCount=${Object.keys(data.siteSettings||{}).length}`, 4);
+        }
 
-    if (fqdn === "twitch.tv") {
-      sessionStorage.setItem('volumecontrol-excluded', 'false');
-      initWhenReady(document);
-      return;
-    }
+        let blocked = false;
+        if (data.whitelistMode) {
+            // Whitelist is derived from remembered sites (siteSettings)
+            const remembered = Object.keys(data.siteSettings || {});
+            if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
+            if (!remembered.some(d => currentDomain.includes(d))) blocked = true;
+        } else {
+            if (data.fqdns.some(d => currentDomain.includes(d))) blocked = true;
+        }
 
-    // Only initialize if not excluded
-    if (!sessionStorage.getItem('volumecontrol-excluded')) {
-      initWhenReady(document);
-    }
-  });
-}
+        // Debug: log final decision
+        if (tc.settings.debugMode) log(`start(): blocked=${blocked}`, 4);
 
-function isFdqnBlacklisted(fqdn, blacklistedFdqns) {
-  return blacklistedFdqns.some(el => {
-    const elRegexPrep = el.replaceAll('.', '\\.').replaceAll('*', '.+');
-    const elRegex = new RegExp(`^${elRegexPrep}$`, 'i');
-    return elRegex.test(fqdn);
-  });
-}
+        // Ensure the content script's blocked flag reflects the current state (clear it when unblocked)
+        tc.vars.isBlocked = blocked;
+        if (blocked) {
+            return;
+        }
 
-checkExclusion();
+        if (data.siteSettings && data.siteSettings[currentDomain]) {
+            const s = data.siteSettings[currentDomain];
+            if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
+            if (s.mono !== undefined) tc.vars.mono = s.mono;
+        }
 
-document.getElementById('newFqdn')?.addEventListener('keydown', function (event) {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    addFqdn();
-  }
-});
+        init();
 
-document.getElementById('addFqdn')?.addEventListener('click', function () {
-  addFqdn();
-});
-
-document.getElementById('fqdnList')?.addEventListener('click', function (e) {
-  if (e.target.classList.contains('remove-entry')) {
-    const entry = e.target.parentNode;
-    const index = entry.dataset.index;
-    removeFqdn(index);
-    entry.remove();
-  }
-});
-
-function addFqdn() {
-  const userInput = document.getElementById('newFqdn').value.trim();
-  if (isValidURL(userInput)) {
-    const rootDomain = extractRootDomain(userInput);
-    browser.storage.local.get({ fqdns: [] }).then(data => {
-      const { fqdns } = data;
-      if (!fqdns.includes(rootDomain)) {
-        fqdns.push(rootDomain);
-        browser.storage.local.set({ fqdns }).then(updateFqdnList);
-      }
-    });
-  } else {
-    alert('Invalid URL or FQDN');
-  }
-  document.getElementById('newFqdn').value = '';
-}
-
-function removeFqdn(index) {
-  browser.storage.local.get({ fqdns: [] })
-    .then(data => {
-      const { fqdns } = data;
-      fqdns.splice(index, 1);
-      return browser.storage.local.set({ fqdns });
-    })
-    .then(() => {
-      updateFqdnList();
-    })
-    .catch(error => {
-      console.error('Error removing FQDN:', error);
+        // Also attempt to (re)hook any existing media elements immediately. This helps when a page
+        // was previously blocked and is now allowed — ensure a gain node/source gets created.
+        try {
+            for (const el of document.querySelectorAll('audio, video')) {
+                connectOutput(el);
+            }
+        } catch (e) {
+            if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
+        }
     });
 }
 
-function updateFqdnList() {
-  browser.storage.local.get({ fqdns: [] }).then(data => {
-    const fqdnList = document.getElementById('fqdnList');
-    fqdnList.innerHTML = '';
-    data.fqdns.forEach((fqdn, index) => {
-      const entry = document.createElement('div');
-      entry.classList.add('fqdn-entry');
-      entry.textContent = fqdn;
-      entry.dataset.index = index;
-      const removeButton = document.createElement('span');
-      removeButton.classList.add('remove-entry');
-      removeButton.textContent = 'x';
-      entry.appendChild(removeButton);
-      fqdnList.appendChild(entry);
-    });
-  });
+if (document.readyState === "loading") {
+    document.addEventListener('DOMContentLoaded', start);
+} else {
+    start();
 }
 
-document.getElementById('newFqdn') && updateFqdnList();
+// Keep content script state in sync when settings change in the extension UI
+if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
+    browserAPI.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local') return;
+
+        if (tc.settings.debugMode) log(`onChanged: keys=[${Object.keys(changes).join(',')}]`, 4);
+
+        // If whitelist/blacklist mode, lists, or remembered sites changed, re-evaluate whether this page should be blocked
+        if (changes.whitelistMode || changes.fqdns || changes.whitelist || changes.siteSettings) {
+            start();
+        }
+
+        // If per-site settings changed, apply them if they affect this domain
+        if (changes.siteSettings) {
+            const currentDomain = extractRootDomain(window.location.href);
+            browserAPI.storage.local.get({ siteSettings: {} }, (data) => {
+                if (browserAPI.runtime && browserAPI.runtime.lastError) return;
+                if (data.siteSettings && data.siteSettings[currentDomain]) {
+                    const s = data.siteSettings[currentDomain];
+                    if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
+                    if (s.mono !== undefined) tc.vars.mono = s.mono;
+                    if (tc.settings.debugMode) log(`siteSettings updated for ${currentDomain}: dB=${tc.vars.dB}, mono=${tc.vars.mono}`, 4);
+                    applyState();
+                    // Ensure audio nodes exist for any existing media elements
+                    try {
+                        init();
+                        for (const el of document.querySelectorAll('audio, video')) connectOutput(el);
+                        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') tc.vars.audioCtx.resume().then(applyState);
+                    } catch (e) {
+                        if (tc.settings.debugMode) log(`re-hook after siteSettings failed: ${e.message}`, 3);
+                    }
+                } else {
+                    if (tc.settings.debugMode) log('siteSettings change did not affect this domain', 4);
+                }
+            });
+        }
+
+        // Update debug mode live
+        if (changes.debugMode) {
+            tc.settings.debugMode = !!changes.debugMode.newValue;
+        }
+    });
+} 
