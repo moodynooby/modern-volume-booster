@@ -7,13 +7,8 @@
   "icons": {
     "96": "icon.svg"
   },
-  "permissions": [
-    "storage", 
-    "activeTab"
-  ],
-  "host_permissions": [
-    "<all_urls>"
-  ],
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_icon": "icon.svg",
     "default_title": "BoomSlider",
@@ -29,7 +24,7 @@
   ],
   "options_ui": {
     "page": "options.html",
-    "open_in_tab": true
+    "open_in_tab": false
   },
   "commands": {
     "_execute_action": {
