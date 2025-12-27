@@ -113,9 +113,11 @@ function connectOutput(element) {
 
     if (!tc.vars.audioCtx) {
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        tc.vars.audioCtx.onstatechange = () => {
+        const stateChangeHandler = () => {
             if (tc.vars.audioCtx.state === 'running') applyState();
         };
+        tc.vars.audioCtx.onstatechange = stateChangeHandler;
+        tc.vars.audioCtx._stateChangeHandler = stateChangeHandler;
     }
 
     if (!tc.vars.gainNode) createGainNode();
@@ -225,11 +227,15 @@ function extractRootDomain(url) {
     return domain.toLowerCase();
 } 
 
-function start() {
+async function start() {
     if (!browserAPI) return;
 
-    browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false }, (data) => {
-        if (browserAPI.runtime.lastError) return;
+    return new Promise((resolve) => {
+        browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false }, (data) => {
+            if (browserAPI.runtime.lastError) {
+                resolve();
+                return;
+            }
 
         if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
 
@@ -276,6 +282,8 @@ function start() {
         } catch (e) {
             if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
         }
+        resolve();
+        });
     });
 }
 
@@ -287,14 +295,16 @@ if (document.readyState === "loading") {
 
 // Keep content script state in sync when settings change in the extension UI
 if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
+    let isUpdating = false;
     browserAPI.storage.onChanged.addListener((changes, area) => {
-        if (area !== 'local') return;
+        if (area !== 'local' || isUpdating) return;
 
         if (tc.settings.debugMode) log(`onChanged: keys=[${Object.keys(changes).join(',')}]`, 4);
 
         // If whitelist/blacklist mode, lists, or remembered sites changed, re-evaluate whether this page should be blocked
         if (changes.whitelistMode || changes.fqdns || changes.whitelist || changes.siteSettings) {
-            start();
+            isUpdating = true;
+            start().finally(() => { isUpdating = false; });
         }
 
         // If per-site settings changed, apply them if they affect this domain

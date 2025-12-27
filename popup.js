@@ -325,6 +325,7 @@ async function saveSiteSettings(tab) {
           { command: "setMono", mono: Boolean(data.siteSettings[domain].mono) },
           () => {
             if (browserApi.runtime && browserApi.runtime.lastError) {
+              // It's possible the content script hasn't injected into the page yet; ignore harmless errors.
             }
           },
         );
@@ -468,11 +469,11 @@ async function initializeControls(tab) {
         tab.id,
         { command: "getVolume" },
         (response) => {
-          if (
-            !browserApi.runtime.lastError &&
-            response &&
-            response.response !== undefined
-          ) {
+          if (browserApi.runtime.lastError) {
+            // Content script not available, ignore
+            return;
+          }
+          if (response && response.response !== undefined) {
             setVolume(response.response, null);
           }
         },
@@ -481,11 +482,11 @@ async function initializeControls(tab) {
         tab.id,
         { command: "getMono" },
         (response) => {
-          if (
-            !browserApi.runtime.lastError &&
-            response &&
-            response.response !== undefined
-          ) {
+          if (browserApi.runtime.lastError) {
+            // Content script not available, ignore
+            return;
+          }
+          if (response && response.response !== undefined) {
             if (monoCheckbox) monoCheckbox.checked = response.response;
           }
         },

@@ -118,7 +118,8 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
       : v;
     volInput.dataset.numericValue = String(numeric);
     volInput.value = formatDb(numeric);
-    onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox.checked) });
+    const monoCheckbox = settingGroup.querySelector('.mono-label input[type="checkbox"]');
+    onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox?.checked) });
   };
 
   volInput.addEventListener("blur", commitVol);

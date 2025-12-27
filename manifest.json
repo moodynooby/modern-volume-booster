@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BoomSlider",
-  "version": "1.5",
+  "version": "1",
   "description": "Modern Volume Boost or Reduce Volume MORE then the limit.",
   "homepage_url": "https://github.com/moodynooby/modern-vol-booster",
   "icons": {
