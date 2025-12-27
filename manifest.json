@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BoomRotary",
-  "version": "1",
+  "version": "2",
   "description": "Modern Volume Boost or Reduce Volume MORE then the limit.",
   "homepage_url": "https://github.com/moodynooby/modern-vol-booster",
   "icons": {
