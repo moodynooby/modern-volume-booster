@@ -4,7 +4,7 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="color-scheme" content="light dark" />
-        <title>BoomSlider</title>
+        <title>BoomRotary</title>
         <link rel="stylesheet" href="popup.css" />
     </head>
     <body>
@@ -14,21 +14,35 @@
             </div>
 
             <div class="top-controls">
-                <input
-                    type="range"
-                    id="volume-slider"
-                    value="0"
-                    min="-32"
-                    max="32"
-                    step="1"
-                    aria-label="Volume control"
-                />
-                <input
-                    type="text"
-                    id="volume-text"
-                    value="0 dB"
-                    aria-label="Volume in decibels"
-                />
+                <div class="dial-container">
+                    <div class="dial" id="volume-dial">
+                        <div class="dial-knob"></div>
+                        <div class="dial-indicator"></div>
+                        <div class="dial-marks">
+                            <div class="mark" data-value="0"></div>
+                            <div class="mark" data-value="25"></div>
+                            <div class="mark" data-value="50"></div>
+                            <div class="mark" data-value="75"></div>
+                            <div class="mark" data-value="100"></div>
+                            <div class="mark" data-value="125"></div>
+                            <div class="mark" data-value="150"></div>
+                            <div class="mark" data-value="175"></div>
+                            <div class="mark" data-value="200"></div>
+                        </div>
+                        <div class="directional-labels">
+                            <div class="label increase">+</div>
+                            <div class="label decrease">−</div>
+                        </div>
+                    </div>
+                    <div class="dial-center">
+                        <input
+                            type="text"
+                            id="volume-text"
+                            value="100%"
+                            aria-label="Volume in percentage"
+                        />
+                    </div>
+                </div>
             </div>
 
             <div class="bot-controls">

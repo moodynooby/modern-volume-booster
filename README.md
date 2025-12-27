@@ -1,4 +1,4 @@
-# BoomSlider - Modern Volume Booster
+# BoomRotary - Modern Volume Booster
 
 ## Description
 
@@ -6,7 +6,7 @@ Lean Dark+ is the minimalist dark mode extension that delivers clean, accurate t
 ## Links
 
 *   [GitHub Repository](https://github.com/moodynooby/modern-vol-booster)
-* [Download For Firefox at AMO](https://addons.mozilla.org/en-US/firefox/addon/modern-boomslider/)
+* [Download For Firefox at AMO](https://addons.mozilla.org/en-US/firefox/addon/modern-BoomRotary/)
 
 ## Features
 
@@ -26,7 +26,7 @@ First
 ![Second](https://addons.mozilla.org/user-media/previews/full/333/333716.png?modified=1756721999)
 ## Setup
 
-BoomSlider is a browser extension. You can install it by loading it unpacked in your browser's extension settings.
+BoomRotary is a browser extension. You can install it by loading it unpacked in your browser's extension settings.
 
 ### For Chrome/Brave/Edge:
 
@@ -34,18 +34,18 @@ BoomSlider is a browser extension. You can install it by loading it unpacked in 
 2.  Open your browser and navigate to `chrome://extensions`.
 3.  Enable "Developer mode" in the top-right corner.
 4.  Click on "Load unpacked" and select the extracted folder.
-5.  The BoomSlider icon should now appear in your browser's toolbar.
+5.  The BoomRotary icon should now appear in your browser's toolbar.
 
 ### For Firefox:
 
 1.  Download the repository as a ZIP file and extract it to a folder.
 2.  Open Firefox and navigate to `about:debugging#/runtime/this-firefox`.
 3.  Click "Load Temporary Add-on..." and select any file inside the extracted folder (e.g., `manifest.json`).
-4.  The BoomSlider icon should appear in your toolbar. Note: Temporary add-ons are removed when Firefox closes. For permanent installation, you might need to sign the extension.
+4.  The BoomRotary icon should appear in your toolbar. Note: Temporary add-ons are removed when Firefox closes. For permanent installation, you might need to sign the extension.
 
 ### Usage
 
-1.  **Open the Popup**: Click on the BoomSlider icon in your browser's toolbar.
+1.  **Open the Popup**: Click on the BoomRotary icon in your browser's toolbar.
 2.  **Adjust Volume**: Use the slider in the popup to increase or decrease the volume for the current tab.
 3.  **Options Page**: Right-click the extension icon and select "Options" to configure additional settings (if any).
 4.  **Keyboard Shortcut**: Use the configured keyboard shortcut (default is `Ctrl+Shift+F` on some browsers, or `Cmd+Shift+F` on macOS) to quickly open the volume control popup.

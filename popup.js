@@ -1,6 +1,6 @@
 const browserApi = typeof browser !== "undefined" ? browser : chrome;
 const cached = {
-  slider: null,
+  dial: null,
   volumeText: null,
   monoCheckbox: null,
   rememberCheckbox: null,
@@ -51,9 +51,9 @@ function extractRootDomain(url) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  const slider = document.getElementById("volume-slider");
-  if (slider) {
-    slider.focus();
+  const dial = document.getElementById("volume-dial");
+  if (dial) {
+    initializeDial(dial);
   }
 
   const settingsBtn = document.getElementById("settings");
@@ -181,6 +181,12 @@ async function updateEnableSwitch(tab) {
       toggleBtn.classList.toggle("disabled", isExcluded);
       toggleBtn.querySelector(".toggle-state").textContent = isExcluded ? "OFF" : "ON";
       
+      // Add pulse animation for state change
+      toggleBtn.classList.add("state-changed");
+      setTimeout(() => {
+        toggleBtn.classList.remove("state-changed");
+      }, 300);
+      
       // Hide other controls when disabled
       const topControls = document.querySelector(".top-controls");
       const leftControls = document.querySelector(".left");
@@ -283,7 +289,11 @@ function handleError(error) {
 function formatValue(dB) {
   const n = Number(dB);
   if (Number.isNaN(n)) return "";
-  return `${n >= 0 ? "+" : ""}${n} dB`;
+  
+  // VLC-style scaling: 0 dB = 100%, can go above 100% for boost
+  // -32 dB = 0%, 0 dB = 100%, +32 dB = 200%
+  const percentage = Math.round(((n + 32) / 64) * 200);
+  return `${percentage}%`;
 }
 
 async function saveSiteSettings(tab) {
@@ -295,15 +305,15 @@ async function saveSiteSettings(tab) {
     const domain = extractRootDomain(tab.url);
     if (!domain) return;
 
-    const volumeSlider =
-      cached.slider || document.getElementById("volume-slider");
+    const volumeDial =
+      cached.dial || document.getElementById("volume-dial");
     const monoCheckbox =
       cached.monoCheckbox || document.getElementById("mono-checkbox");
 
     const data = await storageGet({ siteSettings: {} });
     data.siteSettings = data.siteSettings || {};
     data.siteSettings[domain] = {
-      volume: parseInt(volumeSlider?.value, 10) || 0,
+      volume: parseInt(volumeDial?.dataset.value || 0, 10) || 0,
       mono: Boolean(monoCheckbox?.checked),
     };
     await storageSet({ siteSettings: data.siteSettings });
@@ -339,9 +349,13 @@ async function saveSiteSettings(tab) {
 }
 
 async function setVolume(dB, tab) {
-  const slider = cached.slider || document.querySelector("#volume-slider");
+  const dial = cached.dial || document.querySelector("#volume-dial");
   const text = cached.volumeText || document.querySelector("#volume-text");
-  if (slider) slider.value = String(dB);
+  
+  if (dial) {
+    dial.dataset.value = String(dB);
+    updateDialRotation(dial, dB);
+  }
   if (text) text.value = formatValue(dB);
 
   if (tab) {
@@ -423,28 +437,31 @@ function showError(error) {
 async function initializeControls(tab) {
   if (!tab) return;
 
-  const volumeSlider = document.querySelector("#volume-slider");
+  const volumeDial = document.querySelector("#volume-dial");
   const volumeText = document.querySelector("#volume-text");
   const monoCheckbox = document.querySelector("#mono-checkbox");
   const rememberCheckbox = document.querySelector("#remember-checkbox");
 
-  cached.slider = volumeSlider;
+  cached.dial = volumeDial;
   cached.volumeText = volumeText;
   cached.monoCheckbox = monoCheckbox;
   cached.rememberCheckbox = rememberCheckbox;
 
-  if (volumeSlider) {
-    volumeSlider.addEventListener("input", () => {
-      if (cached.volumeText)
-        cached.volumeText.value = formatValue(volumeSlider.value);
-      setVolume(volumeSlider.value, tab);
-    });
+  if (volumeDial) {
+    // Dial interaction is handled by initializeDial function
+    volumeDial.dataset.value = "0";
   }
 
   if (volumeText) {
     volumeText.addEventListener("change", () => {
-      const val = volumeText.value.match(/-?\d+/)?.[0];
-      if (val) setVolume(val, tab);
+      const val = volumeText.value.match(/\d+/)?.[0];
+      if (val) {
+        // Convert VLC-style percentage back to dB range
+        // 0% = -32 dB, 100% = 0 dB, 200% = +32 dB
+        const percentage = Math.max(0, Math.min(200, parseInt(val)));
+        const dB = Math.round((percentage / 200) * 64 - 32);
+        setVolume(dB, tab);
+      }
     });
   }
 
@@ -494,5 +511,187 @@ async function initializeControls(tab) {
     }
   } catch (e) {
     handleError(e);
+  }
+}
+
+// --- DIAL INTERACTION FUNCTIONS ---
+function initializeDial(dial) {
+  let isDragging = false;
+  let startAngle = 0;
+  let currentAngle = 0;
+
+  function getAngleFromCenter(clientX, clientY) {
+    const rect = dial.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    const angle = Math.atan2(clientY - centerY, clientX - centerX);
+    return angle * (180 / Math.PI);
+  }
+
+  function normalizeAngle(angle) {
+    // Convert angle to 0-360 range for easier calculation
+    while (angle < 0) angle += 360;
+    while (angle >= 360) angle -= 360;
+    return angle;
+  }
+
+  function constrainAngleToRange(angle) {
+    // Normalize angle to -180 to +180 range
+    while (angle > 180) angle -= 360;
+    while (angle < -180) angle += 360;
+    
+    // Map to our usable range: -135° to +135° 
+    // This gives smooth continuous rotation
+    if (angle < -135) angle = -135;
+    if (angle > 135) angle = 135;
+    
+    return angle;
+  }
+
+  function angleToVolume(angle) {
+    // Map -135° to +135° to -32 to +32 dB
+    const normalizedAngle = (angle + 135) / 270; // 0 to 1
+    return Math.round(normalizedAngle * 64 - 32);
+  }
+
+  function updateDialFromAngle(angle) {
+    const constrainedAngle = constrainAngleToRange(angle);
+    const volume = angleToVolume(constrainedAngle);
+    
+    dial.dataset.value = volume;
+    updateDialRotation(dial, volume);
+    
+    // Update text and send volume change
+    const text = cached.volumeText || document.querySelector("#volume-text");
+    if (text) text.value = formatValue(volume);
+    
+    // Get current tab and send volume message
+    browserApi.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        setVolume(volume, tabs[0]);
+      }
+    });
+  }
+
+  function handleStart(e) {
+    isDragging = true;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    // Get current angle from dial position
+    const currentVolume = parseInt(dial.dataset.value || 0);
+    const normalizedVolume = (currentVolume + 32) / 64; // 0 to 1
+    currentAngle = normalizedVolume * 270 - 135; // -135 to +135
+    
+    startAngle = getAngleFromCenter(clientX, clientY);
+    
+    // Add visual feedback
+    dial.classList.add('active');
+    e.preventDefault();
+  }
+
+  function handleMove(e) {
+    if (!isDragging) return;
+    
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    const currentMouseAngle = getAngleFromCenter(clientX, clientY);
+    let angleDiff = currentMouseAngle - startAngle;
+    
+    // Handle angle wrapping for continuous rotation
+    if (angleDiff > 180) angleDiff -= 360;
+    if (angleDiff < -180) angleDiff += 360;
+    
+    // Apply the difference to current angle
+    const newAngle = currentAngle + angleDiff;
+    updateDialFromAngle(newAngle);
+    
+    // Update start angle for next movement
+    startAngle = currentMouseAngle;
+    currentAngle = newAngle;
+    
+    e.preventDefault();
+  }
+
+  function handleEnd() {
+    isDragging = false;
+    dial.classList.remove('active');
+  }
+
+  function handleClick(e) {
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = dial.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    // Calculate distance from center
+    const distance = Math.sqrt(Math.pow(clientX - centerX, 2) + Math.pow(clientY - centerY, 2));
+    const dialRadius = rect.width / 2;
+    
+    // Check if click is in center area (knob) - use 40% of dial radius as threshold
+    if (distance < dialRadius * 0.4) {
+      // Reset to 100% (0 dB)
+      updateDialFromAngle(0);
+      return;
+    }
+    
+    // Calculate angle from click position
+    const angle = Math.atan2(clientY - centerY, clientX - centerX);
+    const angleDegrees = angle * (180 / Math.PI);
+    
+    // Update volume based on click angle
+    updateDialFromAngle(angleDegrees);
+  }
+
+  function handleWheel(e) {
+    e.preventDefault();
+    const currentVolume = parseInt(dial.dataset.value || 0);
+    const delta = e.deltaY > 0 ? -2 : 2; // Scroll down = decrease, up = increase
+    const newVolume = Math.max(-32, Math.min(32, currentVolume + delta));
+    
+    dial.dataset.value = newVolume;
+    updateDialRotation(dial, newVolume);
+    
+    const text = cached.volumeText || document.querySelector("#volume-text");
+    if (text) text.value = formatValue(newVolume);
+    
+    browserApi.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        setVolume(newVolume, tabs[0]);
+      }
+    });
+  }
+
+  // Mouse events
+  dial.addEventListener('mousedown', handleStart);
+  dial.addEventListener('click', handleClick);
+  document.addEventListener('mousemove', handleMove);
+  document.addEventListener('mouseup', handleEnd);
+  
+  // Wheel event for scroll support
+  dial.addEventListener('wheel', handleWheel);
+
+  // Touch events
+  dial.addEventListener('touchstart', handleStart);
+  dial.addEventListener('touchend', handleClick);
+  document.addEventListener('touchmove', handleMove);
+  document.addEventListener('touchend', handleEnd);
+
+  // Initialize to 0 dB (center position)
+  dial.dataset.value = "0";
+  updateDialRotation(dial, 0);
+}
+
+function updateDialRotation(dial, dB) {
+  // Map -32 to +32 dB to -135° to +135°
+  const normalizedVolume = (parseInt(dB) + 32) / 64; // 0 to 1
+  const angle = normalizedVolume * 270 - 135; // -135 to +135
+  
+  const indicator = dial.querySelector('.dial-indicator');
+  if (indicator) {
+    indicator.style.transform = `translateX(-50%) rotate(${angle}deg)`;
   }
 }

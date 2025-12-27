@@ -13,86 +13,168 @@ body {
     display: none !important;
 }
 
-/* --- SLIDER STYLES (Cross-Browser Fix) --- */
+/* --- DIAL STYLES --- */
+.dial-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 0;
+}
 
-/* 1. Reset the input to be a blank canvas */
-input[type="range"] {
-    -webkit-appearance: none; /* Chrome */
-    appearance: none; /* Firefox */
-    width: 100%;
-    height: 24px; /* Match thumb height */
-    margin: 10px 0;
-    padding: 0;
-    background: transparent;
-    display: block;
+.dial {
+    width: 200px;
+    height: 200px;
+    position: relative;
+    border-radius: 50%;
+    background: linear-gradient(145deg, #f0f0f0, #e0e0e0);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1), inset 0 2px 4px rgba(0, 0, 0, 0.1);
     cursor: pointer;
+    transition: transform 0.2s ease;
 }
 
-input[type="range"]:focus {
-    outline: none;
+.dial:hover {
+    transform: scale(1.02);
 }
 
-/* 2. Chrome / Edge / Safari Track */
-input[type="range"]::-webkit-slider-runnable-track {
+.dial:active {
+    transform: scale(0.98);
+}
+
+.dial.active {
+    transform: scale(1.05);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15), inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.dial.active .dial-indicator {
+    background: linear-gradient(to bottom, #66bb6a, #4caf50);
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+}
+
+.dial-knob {
+    position: absolute;
+    width: 60px;
+    height: 60px;
+    background: linear-gradient(145deg, #ffffff, #e0e0e0);
+    border-radius: 50%;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2), inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    z-index: 3;
+}
+
+.dial-indicator {
+    position: absolute;
+    width: 4px;
+    height: 30px;
+    background: linear-gradient(to bottom, #4caf50, #45a049);
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    transform-origin: center 80px;
+    border-radius: 2px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    z-index: 2;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dial-marks {
+    position: absolute;
     width: 100%;
-    height: 10px;
-    background-color: #e0e0e0;
-    background-image: repeating-linear-gradient(
-        90deg,
-        #bdbdbd,
-        #bdbdbd 1px,
-        transparent 1px,
-        transparent calc(100% / 64)
-    );
-    border-radius: 5px;
-    border: 1px solid #d0d0d0;
-    margin-top: 7px; /* Align within the 24px container */
+    height: 100%;
+    top: 0;
+    left: 0;
 }
 
-/* 3. Chrome / Edge / Safari Thumb */
-input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    height: 24px;
-    width: 10px;
-    background: #555;
-    border-radius: 3px;
-    margin-top: -8px; /* Offset: (10px track - 24px thumb) / 2 */
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+.mark {
+    position: absolute;
+    width: 2px;
+    height: 8px;
+    background: #999;
+    top: 10px;
+    left: 50%;
+    transform-origin: center 90px;
+    border-radius: 1px;
 }
 
-/* 4. Firefox Track - NEEDS SPECIFIC STYLING */
-input[type="range"]::-moz-range-track {
+.mark[data-value="-32"] { transform: translateX(-50%) rotate(-135deg); }
+.mark[data-value="-24"] { transform: translateX(-50%) rotate(-101.25deg); }
+.mark[data-value="-16"] { transform: translateX(-50%) rotate(-67.5deg); }
+.mark[data-value="-8"] { transform: translateX(-50%) rotate(-33.75deg); }
+.mark[data-value="0"] { transform: translateX(-50%) rotate(0deg); height: 12px; background: #666; }
+.mark[data-value="8"] { transform: translateX(-50%) rotate(33.75deg); }
+.mark[data-value="16"] { transform: translateX(-50%) rotate(67.5deg); }
+.mark[data-value="24"] { transform: translateX(-50%) rotate(101.25deg); }
+.mark[data-value="32"] { transform: translateX(-50%) rotate(135deg); }
+
+.dial-center {
+    margin-top: 15px;
+    text-align: center;
+}
+
+.directional-labels {
+    position: absolute;
     width: 100%;
-    height: 10px;
-    background-color: #e0e0e0;
-    /* Firefox Gradient Syntax */
-    background-image: repeating-linear-gradient(
-        90deg,
-        #bdbdbd,
-        #bdbdbd 1px,
-        transparent 1px,
-        transparent calc(100% / 64)
-    );
-    border-radius: 5px;
-    border: 1px solid #d0d0d0;
+    height: 100%;
+    top: 0;
+    left: 0;
+    pointer-events: none;
 }
 
-/* 5. Firefox Thumb */
-input[type="range"]::-moz-range-thumb {
-    height: 24px;
-    width: 10px;
-    background: #555;
-    border: none;
-    border-radius: 3px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+.directional-labels .label {
+    position: absolute;
+    font-size: 20px;
+    font-weight: bold;
+    color: #666;
+    opacity: 0.7;
+    transition: all 0.3s ease;
+}
+
+.directional-labels .label.increase {
+    top: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #4caf50;
+}
+
+.directional-labels .label.decrease {
+    bottom: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #f44336;
+}
+
+.dial.active .directional-labels .label.increase {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.2);
+}
+
+.dial.active .directional-labels .label.decrease {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.2);
+}
+
+/* Volume-based color feedback */
+.dial[data-value^="-"] .dial-indicator {
+    background: linear-gradient(to bottom, #f44336, #d32f2f);
+}
+
+.dial[data-value="0"] .dial-indicator {
+    background: linear-gradient(to bottom, #ff9800, #f57c00);
+}
+
+.dial[data-value^="1"] .dial-indicator,
+.dial[data-value^="2"] .dial-indicator,
+.dial[data-value^="3"] .dial-indicator {
+    background: linear-gradient(to bottom, #4caf50, #45a049);
 }
 
 /* --- TOGGLE SWITCH --- */
 .switch {
     position: relative;
     display: inline-block;
-    width: 40px;
-    height: 24px;
+    width: 44px;
+    height: 26px;
     flex-shrink: 0;
 }
 
@@ -109,68 +191,113 @@ input[type="range"]::-moz-range-thumb {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #ccc;
-    transition: 0.4s;
-    border-radius: 24px;
+    background-color: #e0e0e0;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 26px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .slider:before {
     position: absolute;
     content: "";
-    height: 16px;
-    width: 16px;
-    left: 4px;
-    bottom: 4px;
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    bottom: 3px;
     background-color: white;
-    transition: 0.4s;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 input:checked + .slider {
     background-color: #4caf50;
+    box-shadow: inset 0 1px 3px rgba(76, 175, 80, 0.3), 0 0 8px rgba(76, 175, 80, 0.2);
 }
+
 input:checked + .slider:before {
-    transform: translateX(16px);
+    transform: translateX(18px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Hover effects */
+.switch:hover .slider {
+    background-color: #d0d0d0;
+}
+
+.switch:hover input:checked + .slider {
+    background-color: #45a049;
+}
+
+/* Active/pressed state */
+.switch:active .slider:before {
+    transform: scale(0.95);
+}
+
+.switch:active input:checked + .slider:before {
+    transform: translateX(18px) scale(0.95);
 }
 
 /* --- ENABLE TOGGLE BUTTON --- */
 .enable-toggle {
     position: relative;
-    width: 50px;
-    height: 26px;
-    background-color: #4caf50;
-    border: 2px solid #388e3c;
-    border-radius: 13px;
+    width: 56px;
+    height: 30px;
+    background: linear-gradient(145deg, #4caf50, #45a049);
+    border: none;
+    border-radius: 15px;
     cursor: pointer;
     font-family: "Segoe UI", Tahoma, sans-serif;
-    font-weight: bold;
-    font-size: 12px;
+    font-weight: 600;
+    font-size: 13px;
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.3s ease;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     margin: 0;
     padding: 0;
+    box-shadow: 0 3px 6px rgba(76, 175, 80, 0.3), inset 0 1px 2px rgba(255, 255, 255, 0.2);
 }
 
 .enable-toggle.disabled {
-    background-color: #f44336;
-    border-color: #d32f2f;
+    background: linear-gradient(145deg, #f44336, #d32f2f);
+    box-shadow: 0 3px 6px rgba(244, 67, 54, 0.3), inset 0 1px 2px rgba(255, 255, 255, 0.2);
 }
 
 .enable-toggle:hover {
-    transform: scale(1.05);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transform: translateY(-1px);
+    box-shadow: 0 5px 12px rgba(76, 175, 80, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.3);
+}
+
+.enable-toggle.disabled:hover {
+    box-shadow: 0 5px 12px rgba(244, 67, 54, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.3);
 }
 
 .enable-toggle:active {
-    transform: scale(0.95);
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3), inset 0 1px 2px rgba(255, 255, 255, 0.2);
+}
+
+.enable-toggle.disabled:active {
+    box-shadow: 0 2px 4px rgba(244, 67, 54, 0.3), inset 0 1px 2px rgba(255, 255, 255, 0.2);
 }
 
 .toggle-state {
     pointer-events: none;
     user-select: none;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* Add subtle pulse animation for state changes */
+@keyframes togglePulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+
+.enable-toggle.state-changed {
+    animation: togglePulse 0.3s ease-in-out;
 }
 
 /* --- TEXT & CONTROLS --- */
@@ -216,6 +343,8 @@ input:checked + .slider:before {
     padding: 0 15px;
     box-sizing: border-box;
     margin-bottom: 15px;
+    display: flex;
+    align-items: center;
 }
 
 .bot-controls {
@@ -242,14 +371,27 @@ input:checked + .slider:before {
     display: flex;
     align-items: center;
     cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+}
+
+.switch-container:hover {
+    background-color: rgba(0, 0, 0, 0.04);
 }
 
 .label-text {
-    margin-left: 8px;
+    margin-left: 10px;
     font-size: 14px;
+    font-weight: 500;
     user-select: none;
     white-space: nowrap;
     color: #333;
+    transition: color 0.2s ease;
+}
+
+.switch-container:hover .label-text {
+    color: #000;
 }
 
 /* --- MESSAGES --- */
@@ -278,35 +420,61 @@ input:checked + .slider:before {
         color: #e8eaed;
     }
 
-    input[type="range"]::-webkit-slider-runnable-track {
-        background-color: #4a4a4a;
-        border-color: #555;
-        background-image: repeating-linear-gradient(
-            90deg,
-            #666,
-            #666 1px,
-            transparent 1px,
-            transparent calc(100% / 64)
-        );
+    .dial {
+        background: linear-gradient(145deg, #2d2d30, #1e1e20);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3), inset 0 2px 4px rgba(0, 0, 0, 0.2);
     }
 
-    input[type="range"]::-moz-range-track {
-        background-color: #4a4a4a;
-        border-color: #555;
-        background-image: repeating-linear-gradient(
-            90deg,
-            #666,
-            #666 1px,
-            transparent 1px,
-            transparent calc(100% / 64)
-        );
+    .dial-knob {
+        background: linear-gradient(145deg, #3c3c3c, #2a2a2a);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4), inset 0 1px 2px rgba(0, 0, 0, 0.2);
     }
 
-    input[type="range"]::-webkit-slider-thumb {
-        background: #a8c7fa;
+    .dial-indicator {
+        background: linear-gradient(to bottom, #8ab4f8, #669df6);
     }
-    input[type="range"]::-moz-range-thumb {
-        background: #a8c7fa;
+
+    .mark {
+        background: #666;
+    }
+
+    .mark[data-value="0"] {
+        background: #999;
+    }
+
+    .dial.active {
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4), inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .dial.active .dial-indicator {
+        background: linear-gradient(to bottom, #9ccc65, #8ab4f8);
+        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+    }
+
+    .directional-labels .label {
+        color: #999;
+    }
+
+    .directional-labels .label.increase {
+        color: #8ab4f8;
+    }
+
+    .directional-labels .label.decrease {
+        color: #f28b82;
+    }
+
+    .dial[data-value^="-"] .dial-indicator {
+        background: linear-gradient(to bottom, #f28b82, #ea8685);
+    }
+
+    .dial[data-value="0"] .dial-indicator {
+        background: linear-gradient(to bottom, #fdd663, #f9ab00);
+    }
+
+    .dial[data-value^="1"] .dial-indicator,
+    .dial[data-value^="2"] .dial-indicator,
+    .dial[data-value^="3"] .dial-indicator {
+        background: linear-gradient(to bottom, #8ab4f8, #669df6);
     }
 
     .exclusion-message {
@@ -315,17 +483,36 @@ input:checked + .slider:before {
         border-color: #444;
     }
     .slider {
-        background-color: #5f6368;
+        background-color: #3c4043;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
     }
+    
     input:checked + .slider {
         background-color: #8ab4f8;
+        box-shadow: inset 0 1px 3px rgba(138, 180, 248, 0.4), 0 0 8px rgba(138, 180, 248, 0.3);
+    }
+    
+    .switch:hover .slider {
+        background-color: #434548;
+    }
+    
+    .switch:hover input:checked + .slider {
+        background-color: #669df6;
     }
     #volume-text {
         color: #e8eaed;
     }
 
+    .switch-container:hover {
+        background-color: rgba(255, 255, 255, 0.08);
+    }
+    
     .label-text {
         color: #e8eaed;
+    }
+    
+    .switch-container:hover .label-text {
+        color: #fff;
     }
     .settings {
         color: #e8eaed;
@@ -335,13 +522,21 @@ input:checked + .slider:before {
     }
     
     .enable-toggle {
-        background-color: #8ab4f8;
-        border-color: #669df6;
+        background: linear-gradient(145deg, #8ab4f8, #669df6);
+        box-shadow: 0 3px 6px rgba(138, 180, 248, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.2);
     }
     
     .enable-toggle.disabled {
-        background-color: #f28b82;
-        border-color: #ea8685;
+        background: linear-gradient(145deg, #f28b82, #ea8685);
+        box-shadow: 0 3px 6px rgba(242, 139, 130, 0.4), inset 0 1px 2px rgba(255, 255, 255, 0.2);
+    }
+    
+    .enable-toggle:hover {
+        box-shadow: 0 5px 12px rgba(138, 180, 248, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.3);
+    }
+    
+    .enable-toggle.disabled:hover {
+        box-shadow: 0 5px 12px rgba(242, 139, 130, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.3);
     }
 }
 
