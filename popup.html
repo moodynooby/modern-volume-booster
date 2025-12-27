@@ -1,42 +1,87 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="light dark" />
+        <title>BoomSlider</title>
+        <link rel="stylesheet" href="popup.css" />
+    </head>
+    <body>
+        <div id="popup-content">
+            <div class="exclusion-message hidden">
+                Volume Control is disabled for this site.
+            </div>
 
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>BoomSlider</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
+            <div class="top-controls">
+                <input
+                    type="range"
+                    id="volume-slider"
+                    value="0"
+                    min="-32"
+                    max="32"
+                    step="1"
+                    aria-label="Volume control"
+                />
+                <input
+                    type="text"
+                    id="volume-text"
+                    value="0 dB"
+                    aria-label="Volume in decibels"
+                />
+            </div>
 
-<body>
-  <div id="popup-content">
-    <div class="exclusion-message hidden">This site is in the exclusion list</div>
-    <div class="top-controls">
-      <input type="range" id="volume-slider" value="0" min="-32" max="32" step="1" aria-label="Volume control"
-        class="range ">
-      <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
+            <div class="bot-controls">
+                <div class="left">
+                    <label
+                        class="switch-container"
+                        for="mono-checkbox"
+                        title="Toggle Mono Audio"
+                    >
+                        <div class="switch">
+                            <input type="checkbox" id="mono-checkbox" />
+                            <span class="slider"></span>
+                        </div>
+                        <span class="label-text">Mono</span>
+                    </label>
 
-    </div>
-    <div class="bot-controls">
-      <div class="left">
-        <label class="switch-container" for="mono-checkbox">
-          <div class="switch">
-            <input type="checkbox" id="mono-checkbox" name="Mono">
-            <span class="slider"></span>
-          </div>
-          <span class="label-text">Mono</span>
-        </label>
-      </div>
-      <div class="right">
-        <button id="settings" class="settings" aria-label="Open settings">Settings</button>
-      </div>
-    </div>
-  </div>
-  <div id="error-content" class="hidden">
-    <p></p>
-  </div>
-  <script src="popup.js"></script>
-</body>
+                    <label
+                        class="switch-container"
+                        for="remember-checkbox"
+                        title="Remember volume for this site"
+                    >
+                        <div class="switch">
+                            <input type="checkbox" id="remember-checkbox" />
+                            <span class="slider"></span>
+                        </div>
+                        <span class="label-text">Remember</span>
+                    </label>
+                </div>
 
+                <div class="right">
+                    <button
+                        id="enable-toggle"
+                        class="enable-toggle"
+                        title="Enable/Disable on this site"
+                        aria-label="Enable/Disable volume control"
+                    >
+                        <span class="toggle-state">ON</span>
+                    </button>
+
+                    <button
+                        id="settings"
+                        class="settings"
+                        aria-label="Open settings"
+                    >
+                        Settings
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="error-content" class="hidden">
+            <p></p>
+        </div>
+        <script src="popup.js"></script>
+    </body>
 </html>

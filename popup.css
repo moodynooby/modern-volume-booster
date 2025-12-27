@@ -1,0 +1,358 @@
+html,
+body {
+    width: 420px;
+    font-size: 18px;
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    background-color: #fff;
+    color: #333;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* --- SLIDER STYLES (Cross-Browser Fix) --- */
+
+/* 1. Reset the input to be a blank canvas */
+input[type="range"] {
+    -webkit-appearance: none; /* Chrome */
+    appearance: none; /* Firefox */
+    width: 100%;
+    height: 24px; /* Match thumb height */
+    margin: 10px 0;
+    padding: 0;
+    background: transparent;
+    display: block;
+    cursor: pointer;
+}
+
+input[type="range"]:focus {
+    outline: none;
+}
+
+/* 2. Chrome / Edge / Safari Track */
+input[type="range"]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 10px;
+    background-color: #e0e0e0;
+    background-image: repeating-linear-gradient(
+        90deg,
+        #bdbdbd,
+        #bdbdbd 1px,
+        transparent 1px,
+        transparent calc(100% / 64)
+    );
+    border-radius: 5px;
+    border: 1px solid #d0d0d0;
+    margin-top: 7px; /* Align within the 24px container */
+}
+
+/* 3. Chrome / Edge / Safari Thumb */
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 24px;
+    width: 10px;
+    background: #555;
+    border-radius: 3px;
+    margin-top: -8px; /* Offset: (10px track - 24px thumb) / 2 */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* 4. Firefox Track - NEEDS SPECIFIC STYLING */
+input[type="range"]::-moz-range-track {
+    width: 100%;
+    height: 10px;
+    background-color: #e0e0e0;
+    /* Firefox Gradient Syntax */
+    background-image: repeating-linear-gradient(
+        90deg,
+        #bdbdbd,
+        #bdbdbd 1px,
+        transparent 1px,
+        transparent calc(100% / 64)
+    );
+    border-radius: 5px;
+    border: 1px solid #d0d0d0;
+}
+
+/* 5. Firefox Thumb */
+input[type="range"]::-moz-range-thumb {
+    height: 24px;
+    width: 10px;
+    background: #555;
+    border: none;
+    border-radius: 3px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* --- TOGGLE SWITCH --- */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.4s;
+    border-radius: 24px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: 0.4s;
+    border-radius: 50%;
+}
+
+input:checked + .slider {
+    background-color: #4caf50;
+}
+input:checked + .slider:before {
+    transform: translateX(16px);
+}
+
+/* --- ENABLE TOGGLE BUTTON --- */
+.enable-toggle {
+    position: relative;
+    width: 50px;
+    height: 26px;
+    background-color: #4caf50;
+    border: 2px solid #388e3c;
+    border-radius: 13px;
+    cursor: pointer;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    font-weight: bold;
+    font-size: 12px;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    margin: 0;
+    padding: 0;
+}
+
+.enable-toggle.disabled {
+    background-color: #f44336;
+    border-color: #d32f2f;
+}
+
+.enable-toggle:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.enable-toggle:active {
+    transform: scale(0.95);
+}
+
+.toggle-state {
+    pointer-events: none;
+    user-select: none;
+}
+
+/* --- TEXT & CONTROLS --- */
+#volume-text {
+    width: auto;
+    border: none;
+    background-color: transparent;
+    text-align: center;
+    font-size: 18px;
+    display: block;
+    margin: 0 auto;
+    font-weight: bold;
+    color: #555;
+}
+
+.settings {
+    font-size: 14px;
+    font-family: inherit;
+    color: #333;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    margin: 0;
+    font-weight: normal;
+    text-decoration: none;
+    opacity: 0.9;
+    display: flex;
+    align-items: center;
+    height: 24px;
+}
+
+.settings:hover {
+    opacity: 1;
+    text-decoration: underline;
+    color: #000;
+}
+
+/* --- LAYOUT --- */
+.top-controls {
+    flex-direction: column;
+    width: 100%;
+    padding: 0 15px;
+    box-sizing: border-box;
+    margin-bottom: 15px;
+}
+
+.bot-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 15px;
+    margin-bottom: 15px;
+}
+
+.left {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+
+.right {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+
+.switch-container {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.label-text {
+    margin-left: 8px;
+    font-size: 14px;
+    user-select: none;
+    white-space: nowrap;
+    color: #333;
+}
+
+/* --- MESSAGES --- */
+.exclusion-message {
+    text-align: center;
+    padding: 15px;
+    color: #666;
+    width: 100%;
+    box-sizing: border-box;
+    background-color: #f9f9f9;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+#error-content {
+    padding: 20px;
+    text-align: center;
+    color: #d32f2f;
+}
+
+/* --- DARK MODE --- */
+@media (prefers-color-scheme: dark) {
+    html,
+    body {
+        background-color: #202124;
+        color: #e8eaed;
+    }
+
+    input[type="range"]::-webkit-slider-runnable-track {
+        background-color: #4a4a4a;
+        border-color: #555;
+        background-image: repeating-linear-gradient(
+            90deg,
+            #666,
+            #666 1px,
+            transparent 1px,
+            transparent calc(100% / 64)
+        );
+    }
+
+    input[type="range"]::-moz-range-track {
+        background-color: #4a4a4a;
+        border-color: #555;
+        background-image: repeating-linear-gradient(
+            90deg,
+            #666,
+            #666 1px,
+            transparent 1px,
+            transparent calc(100% / 64)
+        );
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+        background: #a8c7fa;
+    }
+    input[type="range"]::-moz-range-thumb {
+        background: #a8c7fa;
+    }
+
+    .exclusion-message {
+        background-color: #333;
+        color: #ccc;
+        border-color: #444;
+    }
+    .slider {
+        background-color: #5f6368;
+    }
+    input:checked + .slider {
+        background-color: #8ab4f8;
+    }
+    #volume-text {
+        color: #e8eaed;
+    }
+
+    .label-text {
+        color: #e8eaed;
+    }
+    .settings {
+        color: #e8eaed;
+    }
+    .settings:hover {
+        color: #fff;
+    }
+    
+    .enable-toggle {
+        background-color: #8ab4f8;
+        border-color: #669df6;
+    }
+    
+    .enable-toggle.disabled {
+        background-color: #f28b82;
+        border-color: #ea8685;
+    }
+}
+
+/* --- STATE CLASSES --- */
+.excluded-site .top-controls,
+.excluded-site .left {
+    display: none !important;
+}
+.excluded-site .exclusion-message {
+    display: block !important;
+}
+.excluded-site .bot-controls {
+    justify-content: flex-end;
+}
