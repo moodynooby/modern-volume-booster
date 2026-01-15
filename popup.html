@@ -1,101 +1,99 @@
 <!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="color-scheme" content="light dark" />
-        <title>BoomRotary</title>
-        <link rel="stylesheet" href="popup.css" />
-    </head>
-    <body>
-        <div id="popup-content">
-            <div class="exclusion-message hidden">
-                Volume Control is disabled for this site.
-            </div>
 
-            <div class="top-controls">
-                <div class="dial-container">
-                    <div class="dial" id="volume-dial">
-                        <div class="dial-knob"></div>
-                        <div class="dial-indicator"></div>
-                        <div class="dial-marks">
-                            <div class="mark" data-value="0"></div>
-                            <div class="mark" data-value="25"></div>
-                            <div class="mark" data-value="50"></div>
-                            <div class="mark" data-value="75"></div>
-                            <div class="mark" data-value="100"></div>
-                            <div class="mark" data-value="125"></div>
-                            <div class="mark" data-value="150"></div>
-                            <div class="mark" data-value="175"></div>
-                            <div class="mark" data-value="200"></div>
-                        </div>
-                        <div class="directional-labels">
-                            <div class="label increase">+</div>
-                            <div class="label decrease">−</div>
-                        </div>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>BoomRotary</title>
+    <link rel="stylesheet" href="shared.css" />
+    <link rel="stylesheet" href="popup.css" />
+</head>
+
+<body>
+    <div id="popup-content">
+        <div class="exclusion-message hidden">
+            Volume Control is disabled for this site.
+        </div>
+
+        <div class="top-controls">
+            <div class="dial-container">
+                <div class="dial" id="volume-dial">
+                    <div class="dial-knob"></div>
+                    <div class="dial-indicator"></div>
+                    <div class="dial-marks">
+                        <div class="mark" data-value="0"></div>
+                        <div class="mark" data-value="25"></div>
+                        <div class="mark" data-value="50"></div>
+                        <div class="mark" data-value="75"></div>
+                        <div class="mark" data-value="100"></div>
+                        <div class="mark" data-value="125"></div>
+                        <div class="mark" data-value="150"></div>
+                        <div class="mark" data-value="175"></div>
+                        <div class="mark" data-value="200"></div>
                     </div>
-                    <div class="dial-center">
-                        <input
-                            type="text"
-                            id="volume-text"
-                            value="100%"
-                            aria-label="Volume in percentage"
-                        />
+                    <div class="directional-labels">
+                        <div class="label increase">+</div>
+                        <div class="label decrease">−</div>
                     </div>
                 </div>
-            </div>
-
-            <div class="bot-controls">
-                <div class="left">
-                    <label
-                        class="switch-container"
-                        for="mono-checkbox"
-                        title="Toggle Mono Audio"
-                    >
-                        <div class="switch">
-                            <input type="checkbox" id="mono-checkbox" />
-                            <span class="slider"></span>
-                        </div>
-                        <span class="label-text">Mono</span>
-                    </label>
-
-                    <label
-                        class="switch-container"
-                        for="remember-checkbox"
-                        title="Remember volume for this site"
-                    >
-                        <div class="switch">
-                            <input type="checkbox" id="remember-checkbox" />
-                            <span class="slider"></span>
-                        </div>
-                        <span class="label-text">Remember</span>
-                    </label>
-                </div>
-
-                <div class="right">
-                    <button
-                        id="enable-toggle"
-                        class="enable-toggle"
-                        title="Enable/Disable on this site"
-                        aria-label="Enable/Disable volume control"
-                    >
-                        <span class="toggle-state">ON</span>
-                    </button>
-
-                    <button
-                        id="settings"
-                        class="settings"
-                        aria-label="Open settings"
-                    >
-                        Settings
-                    </button>
+                <div class="dial-center">
+                    <input type="text" id="volume-text" value="100%" aria-label="Volume in percentage" />
                 </div>
             </div>
         </div>
 
-        <div id="error-content" class="hidden">
-            <p></p>
+        <div class="bot-controls">
+            <!-- Consolidated Toolbar -->
+            <div class="control-bar">
+                <button id="mono-toggle" class="icon-btn" title="Toggle Mono">
+                    <!-- Icon: Activity / Waveform -->
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    <span>Mono</span>
+                </button>
+
+                <button id="remember-toggle" class="icon-btn" title="Remember for this site">
+                    <!-- Icon: Save / Floppy -->
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v13a2 2 0 0 1-2 2z" />
+                        <polyline points="17 21 17 13 7 13 7 21" />
+                        <polyline points="7 3 7 8 15 8" />
+                    </svg>
+                    <span>Remember</span>
+                </button>
+
+                <button id="power-toggle" class="power-btn" title="Enable/Disable">
+                    <!-- Icon: Power -->
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                        <line x1="12" y1="2" x2="12" y2="12" />
+                    </svg>
+                </button>
+
+                <button id="settings" class="icon-btn" title="Settings">
+                    <!-- Icon: Settings / Gear -->
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path
+                            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+                        </path>
+                    </svg>
+                    <span>Config</span>
+                </button>
+            </div>
         </div>
-        <script src="popup.js"></script>
-    </body>
+    </div>
+
+    <div id="error-content" class="hidden">
+        <p></p>
+    </div>
+    <script src="popup.js"></script>
+</body>
+
 </html>

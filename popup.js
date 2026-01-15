@@ -2,9 +2,9 @@ const browserApi = typeof browser !== "undefined" ? browser : chrome;
 const cached = {
   dial: null,
   volumeText: null,
-  monoCheckbox: null,
-  rememberCheckbox: null,
-  enableCheckbox: null,
+  monoBtn: null,
+  rememberBtn: null,
+  powerBtn: null,
 };
 
 function storageGet(keys) {
@@ -104,8 +104,8 @@ function handleTabs(tabs) {
 
   if (restrictedProtocols.includes(protocol)) {
     showError({ message: "Volume control is not available on system pages." });
-    const toggleBtn = document.getElementById("enable-toggle");
-    if (toggleBtn) toggleBtn.style.display = "none";
+    const powerBtn = document.getElementById("power-toggle");
+    if (powerBtn) powerBtn.style.display = "none";
     return;
   }
 
@@ -150,14 +150,14 @@ function handleTabs(tabs) {
 }
 
 async function updateEnableSwitch(tab) {
-  const toggleBtn = document.getElementById("enable-toggle");
+  const powerBtn = document.getElementById("power-toggle");
   const domain = extractRootDomain(tab.url);
 
   if (!domain) {
-    if (toggleBtn) toggleBtn.style.display = "none";
+    if (powerBtn) powerBtn.style.display = "none";
     return;
   } else {
-    if (toggleBtn) toggleBtn.style.display = "flex";
+    if (powerBtn) powerBtn.style.display = "flex";
   }
 
   try {
@@ -171,32 +171,26 @@ async function updateEnableSwitch(tab) {
     // When whitelist mode is active, remembered sites determine which pages are allowed.
     // Hide the enable/active switch to avoid duplicate controls and potential user confusion.
     if (data.whitelistMode) {
-      if (toggleBtn) toggleBtn.style.display = "none";
+      if (powerBtn) powerBtn.style.display = "none";
       return;
     }
 
     let isExcluded = data.fqdns.includes(domain);
+    // Invert logic: Excluded means OFF (not active), Included means ON (active)
+    let isActive = !isExcluded;
 
-    if (toggleBtn) {
-      toggleBtn.classList.toggle("disabled", isExcluded);
-      toggleBtn.querySelector(".toggle-state").textContent = isExcluded ? "OFF" : "ON";
-      
-      // Add pulse animation for state change
-      toggleBtn.classList.add("state-changed");
-      setTimeout(() => {
-        toggleBtn.classList.remove("state-changed");
-      }, 300);
-      
-      // Hide other controls when disabled
+    if (powerBtn) {
+      powerBtn.classList.toggle("active", isActive);
+
+      // Hide other controls when disabled (excluded)
       const topControls = document.querySelector(".top-controls");
-      const leftControls = document.querySelector(".left");
       const exclusionMessage = document.querySelector(".exclusion-message");
-      if (topControls) topControls.style.display = isExcluded ? "none" : "";
-      if (leftControls) leftControls.style.display = isExcluded ? "none" : "";
-      
+
+      if (topControls) topControls.style.display = isActive ? "" : "none";
+
       // Show/hide exclusion message via class
       if (exclusionMessage) {
-        if (isExcluded) {
+        if (!isActive) {
           exclusionMessage.classList.remove("hidden");
         } else {
           exclusionMessage.classList.add("hidden");
@@ -204,9 +198,10 @@ async function updateEnableSwitch(tab) {
       }
     }
 
-    toggleBtn.onclick = () => {
-      const isActive = !toggleBtn.classList.contains("disabled");
-      toggleSitePermission(domain, isActive, tab.id);
+    powerBtn.onclick = () => {
+      // Toggle state
+      const setExcluded = powerBtn.classList.contains("active"); // If active, we want to exclude (turn off)
+      toggleSitePermission(domain, setExcluded, tab.id);
     };
   } catch (e) {
     handleError(e);
@@ -241,12 +236,12 @@ async function toggleSitePermission(domain, shouldExclude, tabId) {
               browserApi.tabs.sendMessage(
                 tabId,
                 { command: "setVolume", dB: settings[domain].volume },
-                () => {},
+                () => { },
               );
               browserApi.tabs.sendMessage(
                 tabId,
                 { command: "setMono", mono: Boolean(settings[domain].mono) },
-                () => {},
+                () => { },
               );
             } catch (e) {
               /* ignore */
@@ -289,7 +284,7 @@ function handleError(error) {
 function formatValue(dB) {
   const n = Number(dB);
   if (Number.isNaN(n)) return "";
-  
+
   // VLC-style scaling: 0 dB = 100%, can go above 100% for boost
   // -32 dB = 0%, 0 dB = 100%, +32 dB = 200%
   const percentage = Math.round(((n + 32) / 64) * 200);
@@ -298,8 +293,9 @@ function formatValue(dB) {
 
 async function saveSiteSettings(tab) {
   try {
-    const rememberCheckbox = document.getElementById("remember-checkbox");
-    if (!rememberCheckbox || !rememberCheckbox.checked || !tab || !tab.url)
+    const rememberBtn = document.getElementById("remember-toggle");
+    // Check 'active' class instead of 'checked' property
+    if (!rememberBtn || !rememberBtn.classList.contains("active") || !tab || !tab.url)
       return;
 
     const domain = extractRootDomain(tab.url);
@@ -307,14 +303,14 @@ async function saveSiteSettings(tab) {
 
     const volumeDial =
       cached.dial || document.getElementById("volume-dial");
-    const monoCheckbox =
-      cached.monoCheckbox || document.getElementById("mono-checkbox");
+    const monoBtn =
+      cached.monoBtn || document.getElementById("mono-toggle");
 
     const data = await storageGet({ siteSettings: {} });
     data.siteSettings = data.siteSettings || {};
     data.siteSettings[domain] = {
       volume: parseInt(volumeDial?.dataset.value || 0, 10) || 0,
-      mono: Boolean(monoCheckbox?.checked),
+      mono: Boolean(monoBtn?.classList.contains("active")),
     };
     await storageSet({ siteSettings: data.siteSettings });
 
@@ -351,7 +347,7 @@ async function saveSiteSettings(tab) {
 async function setVolume(dB, tab) {
   const dial = cached.dial || document.querySelector("#volume-dial");
   const text = cached.volumeText || document.querySelector("#volume-text");
-  
+
   if (dial) {
     dial.dataset.value = String(dB);
     updateDialRotation(dial, dB);
@@ -372,12 +368,15 @@ async function setVolume(dB, tab) {
 }
 
 async function toggleMono(tab) {
-  const monoCheckbox =
-    cached.monoCheckbox || document.querySelector("#mono-checkbox");
-  if (tab && monoCheckbox) {
+  const monoBtn = cached.monoBtn || document.querySelector("#mono-toggle");
+  if (tab && monoBtn) {
+    // Toggle active state locally first
+    monoBtn.classList.toggle("active");
+    const isMono = monoBtn.classList.contains("active");
+
     browserApi.tabs.sendMessage(
       tab.id,
-      { command: "setMono", mono: monoCheckbox.checked },
+      { command: "setMono", mono: isMono },
       (res) => {
         if (browserApi.runtime.lastError)
           handleError(browserApi.runtime.lastError);
@@ -389,17 +388,22 @@ async function toggleMono(tab) {
 
 async function toggleRemember(tab) {
   try {
-    const rememberCheckbox = document.getElementById("remember-checkbox");
+    const rememberBtn = document.getElementById("remember-toggle");
     const domain = extractRootDomain(tab.url);
     if (!domain) return;
 
-    if (rememberCheckbox && rememberCheckbox.checked) {
-      await saveSiteSettings(tab);
-    } else {
-      const data = await storageGet({ siteSettings: {} });
-      if (data.siteSettings && data.siteSettings[domain]) {
-        delete data.siteSettings[domain];
-        await storageSet({ siteSettings: data.siteSettings });
+    if (rememberBtn) {
+      rememberBtn.classList.toggle("active");
+      const isRemembered = rememberBtn.classList.contains("active");
+
+      if (isRemembered) {
+        await saveSiteSettings(tab);
+      } else {
+        const data = await storageGet({ siteSettings: {} });
+        if (data.siteSettings && data.siteSettings[domain]) {
+          delete data.siteSettings[domain];
+          await storageSet({ siteSettings: data.siteSettings });
+        }
       }
     }
   } catch (e) {
@@ -421,9 +425,8 @@ function showError(error) {
     if (exclusionMessage) exclusionMessage.classList.remove("hidden");
 
     const top = document.querySelector(".top-controls");
-    const left = document.querySelector(".left");
+    // const left = document.querySelector(".left"); // Removed in new design
     if (top) top.classList.add("hidden");
-    if (left) left.classList.add("hidden");
     document.body.classList.add("excluded-site");
   } else {
     if (errorContent) {
@@ -439,16 +442,17 @@ async function initializeControls(tab) {
 
   const volumeDial = document.querySelector("#volume-dial");
   const volumeText = document.querySelector("#volume-text");
-  const monoCheckbox = document.querySelector("#mono-checkbox");
-  const rememberCheckbox = document.querySelector("#remember-checkbox");
+  const monoBtn = document.querySelector("#mono-toggle");
+  const rememberBtn = document.querySelector("#remember-toggle");
+  const powerBtn = document.querySelector("#power-toggle");
 
   cached.dial = volumeDial;
   cached.volumeText = volumeText;
-  cached.monoCheckbox = monoCheckbox;
-  cached.rememberCheckbox = rememberCheckbox;
+  cached.monoBtn = monoBtn;
+  cached.rememberBtn = rememberBtn;
+  cached.powerBtn = powerBtn;
 
   if (volumeDial) {
-    // Dial interaction is handled by initializeDial function
     volumeDial.dataset.value = "0";
   }
 
@@ -456,8 +460,6 @@ async function initializeControls(tab) {
     volumeText.addEventListener("change", () => {
       const val = volumeText.value.match(/\d+/)?.[0];
       if (val) {
-        // Convert VLC-style percentage back to dB range
-        // 0% = -32 dB, 100% = 0 dB, 200% = +32 dB
         const percentage = Math.max(0, Math.min(200, parseInt(val)));
         const dB = Math.round((percentage / 200) * 64 - 32);
         setVolume(dB, tab);
@@ -465,10 +467,10 @@ async function initializeControls(tab) {
     });
   }
 
-  if (monoCheckbox)
-    monoCheckbox.addEventListener("change", () => toggleMono(tab));
-  if (rememberCheckbox)
-    rememberCheckbox.addEventListener("change", () => toggleRemember(tab));
+  if (monoBtn)
+    monoBtn.addEventListener("click", () => toggleMono(tab));
+  if (rememberBtn)
+    rememberBtn.addEventListener("click", () => toggleRemember(tab));
 
   const domain = extractRootDomain(tab.url);
   if (!domain) return;
@@ -477,19 +479,16 @@ async function initializeControls(tab) {
     const data = await storageGet({ siteSettings: {} });
     const saved = (data.siteSettings || {})[domain];
     if (saved) {
-      if (rememberCheckbox) rememberCheckbox.checked = true;
+      if (rememberBtn) rememberBtn.classList.add("active");
       if (saved.volume !== undefined) setVolume(saved.volume, null);
-      if (saved.mono !== undefined && monoCheckbox)
-        monoCheckbox.checked = saved.mono;
+      if (saved.mono !== undefined && monoBtn)
+        monoBtn.classList.toggle("active", saved.mono);
     } else {
       browserApi.tabs.sendMessage(
         tab.id,
         { command: "getVolume" },
         (response) => {
-          if (browserApi.runtime.lastError) {
-            // Content script not available, ignore
-            return;
-          }
+          if (browserApi.runtime.lastError) return;
           if (response && response.response !== undefined) {
             setVolume(response.response, null);
           }
@@ -499,12 +498,9 @@ async function initializeControls(tab) {
         tab.id,
         { command: "getMono" },
         (response) => {
-          if (browserApi.runtime.lastError) {
-            // Content script not available, ignore
-            return;
-          }
+          if (browserApi.runtime.lastError) return;
           if (response && response.response !== undefined) {
-            if (monoCheckbox) monoCheckbox.checked = response.response;
+            if (monoBtn) monoBtn.classList.toggle("active", response.response);
           }
         },
       );
@@ -524,49 +520,42 @@ function initializeDial(dial) {
     const rect = dial.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    
+
     const angle = Math.atan2(clientY - centerY, clientX - centerX);
     return angle * (180 / Math.PI);
   }
 
   function normalizeAngle(angle) {
-    // Convert angle to 0-360 range for easier calculation
     while (angle < 0) angle += 360;
     while (angle >= 360) angle -= 360;
     return angle;
   }
 
   function constrainAngleToRange(angle) {
-    // Normalize angle to -180 to +180 range
     while (angle > 180) angle -= 360;
     while (angle < -180) angle += 360;
-    
-    // Map to our usable range: -135° to +135° 
-    // This gives smooth continuous rotation
+
     if (angle < -135) angle = -135;
     if (angle > 135) angle = 135;
-    
+
     return angle;
   }
 
   function angleToVolume(angle) {
-    // Map -135° to +135° to -32 to +32 dB
-    const normalizedAngle = (angle + 135) / 270; // 0 to 1
+    const normalizedAngle = (angle + 135) / 270;
     return Math.round(normalizedAngle * 64 - 32);
   }
 
   function updateDialFromAngle(angle) {
     const constrainedAngle = constrainAngleToRange(angle);
     const volume = angleToVolume(constrainedAngle);
-    
+
     dial.dataset.value = volume;
     updateDialRotation(dial, volume);
-    
-    // Update text and send volume change
+
     const text = cached.volumeText || document.querySelector("#volume-text");
     if (text) text.value = formatValue(volume);
-    
-    // Get current tab and send volume message
+
     browserApi.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
         setVolume(volume, tabs[0]);
@@ -578,40 +567,35 @@ function initializeDial(dial) {
     isDragging = true;
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    // Get current angle from dial position
+
     const currentVolume = parseInt(dial.dataset.value || 0);
-    const normalizedVolume = (currentVolume + 32) / 64; // 0 to 1
-    currentAngle = normalizedVolume * 270 - 135; // -135 to +135
-    
+    const normalizedVolume = (currentVolume + 32) / 64;
+    currentAngle = normalizedVolume * 270 - 135;
+
     startAngle = getAngleFromCenter(clientX, clientY);
-    
-    // Add visual feedback
+
     dial.classList.add('active');
     e.preventDefault();
   }
 
   function handleMove(e) {
     if (!isDragging) return;
-    
+
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
+
     const currentMouseAngle = getAngleFromCenter(clientX, clientY);
     let angleDiff = currentMouseAngle - startAngle;
-    
-    // Handle angle wrapping for continuous rotation
+
     if (angleDiff > 180) angleDiff -= 360;
     if (angleDiff < -180) angleDiff += 360;
-    
-    // Apply the difference to current angle
+
     const newAngle = currentAngle + angleDiff;
     updateDialFromAngle(newAngle);
-    
-    // Update start angle for next movement
+
     startAngle = currentMouseAngle;
     currentAngle = newAngle;
-    
+
     e.preventDefault();
   }
 
@@ -626,38 +610,33 @@ function initializeDial(dial) {
     const rect = dial.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    
-    // Calculate distance from center
+
     const distance = Math.sqrt(Math.pow(clientX - centerX, 2) + Math.pow(clientY - centerY, 2));
     const dialRadius = rect.width / 2;
-    
-    // Check if click is in center area (knob) - use 40% of dial radius as threshold
+
     if (distance < dialRadius * 0.4) {
-      // Reset to 100% (0 dB)
       updateDialFromAngle(0);
       return;
     }
-    
-    // Calculate angle from click position
+
     const angle = Math.atan2(clientY - centerY, clientX - centerX);
     const angleDegrees = angle * (180 / Math.PI);
-    
-    // Update volume based on click angle
+
     updateDialFromAngle(angleDegrees);
   }
 
   function handleWheel(e) {
     e.preventDefault();
     const currentVolume = parseInt(dial.dataset.value || 0);
-    const delta = e.deltaY > 0 ? -2 : 2; // Scroll down = decrease, up = increase
+    const delta = e.deltaY > 0 ? -2 : 2;
     const newVolume = Math.max(-32, Math.min(32, currentVolume + delta));
-    
+
     dial.dataset.value = newVolume;
     updateDialRotation(dial, newVolume);
-    
+
     const text = cached.volumeText || document.querySelector("#volume-text");
     if (text) text.value = formatValue(newVolume);
-    
+
     browserApi.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
         setVolume(newVolume, tabs[0]);
@@ -665,31 +644,26 @@ function initializeDial(dial) {
     });
   }
 
-  // Mouse events
   dial.addEventListener('mousedown', handleStart);
   dial.addEventListener('click', handleClick);
   document.addEventListener('mousemove', handleMove);
   document.addEventListener('mouseup', handleEnd);
-  
-  // Wheel event for scroll support
+
   dial.addEventListener('wheel', handleWheel);
 
-  // Touch events
   dial.addEventListener('touchstart', handleStart);
   dial.addEventListener('touchend', handleClick);
   document.addEventListener('touchmove', handleMove);
   document.addEventListener('touchend', handleEnd);
 
-  // Initialize to 0 dB (center position)
   dial.dataset.value = "0";
   updateDialRotation(dial, 0);
 }
 
 function updateDialRotation(dial, dB) {
-  // Map -32 to +32 dB to -135° to +135°
-  const normalizedVolume = (parseInt(dB) + 32) / 64; // 0 to 1
-  const angle = normalizedVolume * 270 - 135; // -135 to +135
-  
+  const normalizedVolume = (parseInt(dB) + 32) / 64;
+  const angle = normalizedVolume * 270 - 135;
+
   const indicator = dial.querySelector('.dial-indicator');
   if (indicator) {
     indicator.style.transform = `translateX(-50%) rotate(${angle}deg)`;

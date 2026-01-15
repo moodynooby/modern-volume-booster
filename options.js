@@ -326,10 +326,8 @@ async function initOptions() {
 
     // Helper to show/hide the blocklist UI
     function setBlocklistVisible(show) {
-      if (listTitle) listTitle.style.display = show ? "block" : "none";
-      if (fqdnAddGroup) fqdnAddGroup.style.display = show ? "flex" : "none";
-      if (fqdnListContainer)
-        fqdnListContainer.style.display = show ? "block" : "none";
+      const blocklistSection = document.getElementById("blocklistSection");
+      if (blocklistSection) blocklistSection.style.display = show ? "block" : "none";
     }
 
     // Initialize visibility
