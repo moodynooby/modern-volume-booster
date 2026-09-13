@@ -565,7 +565,6 @@ function showError(error) {
     if (exclusionMessage) exclusionMessage.classList.remove("hidden");
 
     const top = document.querySelector(".top-controls");
-    // const left = document.querySelector(".left"); // Removed in new design
     if (top) top.classList.add("hidden");
     document.body.classList.add("excluded-site");
   } else {
@@ -686,12 +685,6 @@ function initializeDial(dial) {
 
     const angle = Math.atan2(clientY - centerY, clientX - centerX);
     return angle * (180 / Math.PI);
-  }
-
-  function normalizeAngle(angle) {
-    while (angle < 0) angle += 360;
-    while (angle >= 360) angle -= 360;
-    return angle;
   }
 
   function constrainAngleToRange(angle) {

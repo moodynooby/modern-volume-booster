@@ -14,7 +14,7 @@ Excluded-site entries match by domain, and entries saved **with a path** (such a
 
 **Compatibility:** Firefox 128+ (event-page background) and Chromium 121+ — Chrome, Edge, Brave, Opera, Vivaldi from January 2024 onward (service-worker background). Chromium 120 and older rejects the cross-browser manifest shape at load time, so the manifest declares `minimum_chrome_version: "121"`.
 
-Media that cannot be boosted (DRM-protected or cross-origin streams) is detected automatically: the popup explains the restriction, the slider clamps at 0 dB, and lowering volume still works through the native fallback. See [Restricted Media](#restricted-media-drm--cross-origin) below. On Firefox, DRM audio **can** be boosted — see the engine note below.
+Media that cannot be boosted (DRM-protected or cross-origin streams) is detected automatically: the popup explains the restriction, the dial clamps at 0 dB, and lowering volume still works through the native fallback. See [Restricted Media](#restricted-media-drm--cross-origin) below. On Firefox, DRM audio **can** be boosted — see the engine note below.
 
 ## Restricted Media (DRM & Cross-Origin)
 
@@ -31,7 +31,7 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 
 **What you will see when media is restricted** (Chromium + DRM, or any engine + cross-origin)
 
-- The popup shows a "restricted by DRM" note (or a cross-origin restriction note) and the slider clamps at 0 dB — no boost is offered because none is possible on that media in that browser.
+- The popup shows a "restricted by DRM" note (or a cross-origin restriction note) and the dial clamps at 0 dB — no boost is offered because none is possible on that media in that browser.
 - Lowering volume still works: the element's native volume is used (attenuation only, exact dB math, and mute).
 - Mono mixing is unavailable on such media.
 
@@ -42,7 +42,7 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 - **Residual (documented) limitation**: an element that plays CLEAR content and later switches to encrypted media **on the same element** mid-session can already be routed when the evidence lands — on Chromium there is no way back from `createMediaElementSource()`, so the verdict flips to "restricted" and the (silenced) route cannot be unwound. This exposure existed in every prior version after its grace window expired; v6.14 just makes clear content route sooner. Real sites switch protection by reloading the source (which re-earns proof) or the player, so this is a theoretical edge.
 - The MAIN-world hook computes one aggregate page verdict over **every** element it tracks — attached to the DOM, detached (JS-created players that never touch the DOM), or inside a shadow DOM — and publishes it with immediate change notifications.
 - Embedded iframes report their verdict to the top frame (1 s heartbeat, 2.5 s TTL) and the most restrictive live report wins; the verdict relaxes automatically when the media goes quiescent or the frame is removed.
-- All verdicts are computed deterministically by the top frame — no cross-frame response races, which is what keeps the restriction note stable while you drag the slider.
+- All verdicts are computed deterministically by the top frame — no cross-frame response races, which is what keeps the restriction note stable while you adjust the dial.
 - Same-window spoofed messages are ignored (`event.source === window`), so page scripts cannot fake or clear a verdict.
 - Engine detection (v6.13): the UA string is checked **FIRST** — a UA containing `Firefox/` identifies Gecko (DRM media is routable, and routed only after `setMediaKeys()` succeeds) — with `navigator.userAgentData` identifying Chromium-family browsers (protected-audio guard stays) checked second. The order matters: a future Firefox that grows a `userAgentData` shim must still classify as Gecko (issue #68). Unknown or privacy-stripped UAs keep the conservative guard.
 

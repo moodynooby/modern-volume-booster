@@ -215,7 +215,7 @@ function Write-Package {
 
 Push-Location $RootPath
 try {
-    foreach ($requiredFile in @("manifest.json", "ico.svg", "chrome.png")) {
+    foreach ($requiredFile in @("manifest.json", "icon.svg", "chrome.png")) {
         if (-not (Test-Path -LiteralPath (Join-Path $RootPath $requiredFile))) {
             throw "Required file is missing: $requiredFile"
         }
@@ -227,7 +227,7 @@ try {
     Remove-DirectoryInRepo $OutputRoot
     New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 
-    Write-Package -Browser "firefox" -IconFile "ico.svg" -Version $version
+    Write-Package -Browser "firefox" -IconFile "icon.svg" -Version $version
     Write-Package -Browser "chrome" -IconFile "chrome.png" -Version $version
 }
 finally {
