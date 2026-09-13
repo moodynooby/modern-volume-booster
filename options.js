@@ -30,6 +30,21 @@ function formatDb(v) {
   return `${n >= 0 ? "+" : ""}${n} dB`;
 }
 
+function callApiOpt(fn, args) {
+  if (SharedOpts.callApi) return SharedOpts.callApi(fn, args);
+  return new Promise((resolve, reject) => {
+    try {
+      fn(...(args || []), (res) => {
+        try {
+          if (browserApi && browserApi.runtime && browserApi.runtime.lastError) {
+            reject(browserApi.runtime.lastError);
+          } else resolve(res);
+        } catch (e) { reject(e); }
+      });
+    } catch (e) { reject(e); }
+  });
+}
+
 // debounce timer for memory list rendering to avoid double-renders when storage changes
 let memoryListRenderTimeout = null;
 // debounce for fqdn list updates
@@ -349,6 +364,96 @@ async function renderFqdnList() {
   }
 }
 
+// Render the list of keyboard shortcuts using commands.getAll().
+// Each row shows the action description and the current key combo as keycaps.
+async function renderShortcuts() {
+  const container = document.getElementById("shortcutsList");
+  if (!container) return;
+  if (!browserApi || !browserApi.commands || typeof browserApi.commands.getAll !== "function") {
+    container.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-msg";
+    empty.textContent = "Keyboard shortcuts are not available in this browser.";
+    container.appendChild(empty);
+    return;
+  }
+
+  let commands = [];
+  try {
+    commands = await callApiOpt(browserApi.commands.getAll.bind(browserApi.commands), []);
+  } catch (e) {
+    console.error("Options: commands.getAll failed", e);
+    container.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-msg";
+    empty.textContent = "Could not load shortcuts.";
+    container.appendChild(empty);
+    return;
+  }
+
+  container.innerHTML = "";
+  if (!commands || commands.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-msg";
+    empty.textContent = "No shortcuts configured.";
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const cmd of commands) {
+    const entry = document.createElement("div");
+    entry.className = "shortcut-entry";
+
+    const name = document.createElement("div");
+    name.className = "shortcut-name";
+    name.textContent = cmd.description || cmd.name || "Shortcut";
+
+    const keys = document.createElement("div");
+    keys.className = "shortcut-keys";
+    if (cmd.shortcut) {
+      const parts = String(cmd.shortcut).split("+");
+      parts.forEach((part, i) => {
+        if (i > 0) {
+          const sep = document.createElement("span");
+          sep.className = "keycap-separator";
+          sep.textContent = "+";
+          keys.appendChild(sep);
+        }
+        const kbd = document.createElement("span");
+        kbd.className = "keycap";
+        kbd.textContent = part.trim();
+        keys.appendChild(kbd);
+      });
+    } else {
+      const unset = document.createElement("span");
+      unset.className = "shortcut-unset";
+      unset.textContent = "Not set";
+      keys.appendChild(unset);
+    }
+
+    entry.appendChild(name);
+    entry.appendChild(keys);
+    container.appendChild(entry);
+  }
+}
+
+// Open the browser's keyboard shortcut customization page.
+function openShortcutsPage() {
+  if (!browserApi || !browserApi.tabs || typeof browserApi.tabs.create !== "function") {
+    alert("Could not open the shortcut settings page automatically. Please open your browser's extension shortcut settings manually.");
+    return;
+  }
+  let isFirefox = false;
+  try {
+    isFirefox = browserApi.runtime.getURL("").indexOf("moz-extension://") === 0;
+  } catch { isFirefox = false; }
+  const url = isFirefox ? "about:addons/shortcuts" : "chrome://extensions/shortcuts";
+  callApiOpt(browserApi.tabs.create.bind(browserApi.tabs), [{ url }]).catch((err) => {
+    console.error("Options: failed to open shortcuts page", err);
+    alert("Could not open the shortcut settings page automatically. Please open your browser's extension shortcut settings manually.");
+  });
+}
+
 async function initOptions() {
   // Wire up whitelist mode and debug mode
   const whitelistModeCheckbox = document.getElementById("whitelistMode");
@@ -464,6 +569,22 @@ async function initOptions() {
     newRememberedInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") addRememberedBtn.click();
     });
+  }
+
+  // Keyboard shortcuts: wire up the button and render the current shortcuts.
+  const openShortcutsBtn = document.getElementById("openShortcutsPage");
+  if (openShortcutsBtn) {
+    openShortcutsBtn.addEventListener("click", openShortcutsPage);
+  }
+  await renderShortcuts();
+
+  // Refresh the shortcuts list when the user customizes them in another tab.
+  if (browserApi && browserApi.commands && browserApi.commands.onChanged) {
+    try {
+      browserApi.commands.onChanged.addListener(() => {
+        renderShortcuts();
+      });
+    } catch { /* ignore */ }
   }
 
   await renderFqdnList();

@@ -280,6 +280,11 @@ body {
     filter: drop-shadow(0 0 2px rgba(33, 150, 243, 0.4));
 }
 
+.icon-btn.muted {
+    color: #c62828;
+    background-color: rgba(198, 40, 40, 0.1);
+}
+
 .power-btn {
     width: 56px;
     height: 56px;

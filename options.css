@@ -309,3 +309,60 @@ footer {
     color: var(--color-text-muted);
     cursor: pointer;
 }
+
+/* --- Keyboard shortcuts --- */
+.shortcut-entry {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.shortcut-entry:last-child {
+    border-bottom: none;
+}
+
+.shortcut-entry:hover {
+    background-color: var(--color-surface);
+}
+
+.shortcut-name {
+    flex: 1;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.shortcut-keys {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.keycap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 2px 6px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.keycap-separator {
+    color: var(--color-text-muted);
+    font-weight: bold;
+    font-size: 12px;
+    user-select: none;
+}
+
+.shortcut-unset {
+    color: var(--color-text-muted);
+    font-style: italic;
+    font-size: 13px;
+}

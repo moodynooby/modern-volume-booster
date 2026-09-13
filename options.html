@@ -69,11 +69,21 @@
         <div id="memoryList" class="list-container"></div>
     </div>
 
+    <div class="card">
+        <h3>Keyboard Shortcuts</h3>
+        <span class="hint">Volume shortcuts work even when the popup is closed (<em>Alt+Shift+Up/Down</em> by 1 dB, <em>Alt+Shift+0</em> reset, <em>Alt+Shift+M</em> mono). Remap them in your browser's shortcut settings.</span>
+        <div class="input-group">
+            <button id="openShortcutsPage">Open Browser Shortcut Settings</button>
+        </div>
+        <div id="shortcutsList" class="list-container"></div>
+    </div>
+
     <footer>
         <div class="debug-container">
             <input type="checkbox" id="debugMode" />
-            <label for="debugMode">Enable Debug Console Logging</label>
+            <label for="debugMode">Enable Debug Mode</label>
         </div>
+        <span class="hint">Logs to the console and highlights hooked media on the page.</span>
     </footer>
 
     <script src="shared.js"></script>

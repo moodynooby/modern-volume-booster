@@ -111,11 +111,26 @@ function applyAudioControlState(state = {}) {
     if (state.limitation) note.textContent = state.limitation;
     note.classList.toggle("hidden", !cached.boostLimited);
   }
-  if (state.muted !== undefined) cached.muted = Boolean(state.muted);
+  if (state.muted !== undefined) {
+    cached.muted = Boolean(state.muted);
+    applyMuteButtonState(cached.muted);
+  }
   const dial = cached.dial || document.querySelector("#volume-dial");
   if (dial && Number(dial.dataset.value) > cached.maxDb) {
     setVolumeDisplayOnly(cached.maxDb);
   }
+}
+
+function applyMuteButtonState(muted) {
+  const btn = document.querySelector("#mute-toggle");
+  if (!btn) return;
+  const isMuted = Boolean(muted);
+  btn.classList.toggle("muted", isMuted);
+  btn.classList.toggle("active", isMuted);
+  btn.setAttribute("aria-pressed", String(isMuted));
+  const label = btn.querySelector("span");
+  if (label) label.textContent = isMuted ? "Muted" : "Mute";
+  btn.title = isMuted ? "Unmute" : "Mute/Unmute";
 }
 
 async function refreshAudioControlState(tab) {
@@ -421,11 +436,17 @@ async function saveSiteSettings(tab) {
     const data = await storageGet({ siteSettings: {} });
     data.siteSettings = data.siteSettings || {};
     const settingsKey = getSettingsKey(data.siteSettings, domain) || domain;
-    const prevMuted = data.siteSettings[settingsKey] ? Boolean(data.siteSettings[settingsKey].muted) : Boolean(cached.muted);
+    const muteBtnLive = document.querySelector("#mute-toggle");
+    const liveMuted = muteBtnLive
+      ? muteBtnLive.classList.contains("muted") || muteBtnLive.classList.contains("active")
+      : Boolean(cached.muted);
+    const prevMuted = data.siteSettings[settingsKey] ? Boolean(data.siteSettings[settingsKey].muted) : liveMuted;
+    // Prefer the live button/cached state when it differs (e.g. just toggled).
+    const muted = muteBtnLive ? liveMuted : (cached.muted !== undefined ? Boolean(cached.muted) : prevMuted);
     data.siteSettings[settingsKey] = {
       volume: Math.min(normalizeDb(parseInt(volumeDial?.dataset.value || 0, 10) || 0), cached.maxDb),
       mono: Boolean(monoBtn?.classList.contains("active")),
-      muted: prevMuted,
+      muted: muted,
     };
     await storageSet({ siteSettings: data.siteSettings });
 
@@ -488,6 +509,20 @@ async function toggleMono(tab) {
     await sendTabMessage(tab.id, { command: "setMono", mono: isMono });
     await saveSiteSettings(tab);
   }
+}
+
+async function toggleMute(tab) {
+  if (!tab || tab.id === undefined) return;
+  const nextMuted = !cached.muted;
+  cached.muted = nextMuted;
+  applyMuteButtonState(nextMuted);
+  await sendTabMessage(tab.id, { command: "setMute", muted: nextMuted });
+  const state = await refreshAudioControlState(tab);
+  if (state && state.muted !== undefined) {
+    cached.muted = Boolean(state.muted);
+    applyMuteButtonState(cached.muted);
+  }
+  await saveSiteSettings(tab);
 }
 
 async function toggleRemember(tab) {
@@ -580,6 +615,9 @@ async function initializeControls(tab) {
     monoBtn.addEventListener("click", () => toggleMono(tab));
   if (rememberBtn)
     rememberBtn.addEventListener("click", () => toggleRemember(tab));
+  const muteBtn = document.querySelector("#mute-toggle");
+  if (muteBtn)
+    muteBtn.addEventListener("click", () => toggleMute(tab));
 
   const domain = extractRootDomain(tab.url);
   if (!domain) return;
@@ -598,7 +636,10 @@ async function initializeControls(tab) {
     const saved = settingsKey ? data.siteSettings[settingsKey] : null;
     if (saved) {
       if (rememberBtn) rememberBtn.classList.add("active");
-      if (saved.muted !== undefined) cached.muted = Boolean(saved.muted);
+      if (saved.muted !== undefined) {
+        cached.muted = Boolean(saved.muted);
+        applyMuteButtonState(cached.muted);
+      }
       if (saved.mono !== undefined && monoBtn)
         monoBtn.classList.toggle("active", Boolean(saved.mono));
       if (saved.volume !== undefined) setVolumeDisplayOnly(saved.volume);
