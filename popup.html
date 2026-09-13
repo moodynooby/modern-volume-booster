@@ -41,6 +41,9 @@
                     <input type="text" id="volume-text" value="100%" aria-label="Volume in percentage" />
                 </div>
             </div>
+            <p id="volume-limit-note" class="volume-limit-note hidden" role="status">
+                Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.
+            </p>
         </div>
 
         <div class="bot-controls">
@@ -93,6 +96,7 @@
     <div id="error-content" class="hidden">
         <p></p>
     </div>
+    <script src="shared.js"></script>
     <script src="popup.js"></script>
 </body>
 

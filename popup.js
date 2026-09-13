@@ -1,11 +1,61 @@
 const browserApi = typeof browser !== "undefined" ? browser : chrome;
+const Shared = (typeof globalThis !== "undefined" && globalThis.VolumeControlShared) || {};
 const cached = {
   dial: null,
   volumeText: null,
   monoBtn: null,
   rememberBtn: null,
   powerBtn: null,
+  limitNote: null,
+  activeTab: null,
+  maxDb: 32,
+  boostLimited: false,
+  muted: false,
 };
+
+function normalizeDb(value) {
+  if (Shared.normalizeDb) return Shared.normalizeDb(value);
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-32, Math.min(32, Math.round(n)));
+}
+
+function getSettingsKey(siteSettings, domain) {
+  if (!siteSettings || !domain) return null;
+  if (Shared.getSiteSettingsKey) return Shared.getSiteSettingsKey(siteSettings, domain);
+  if (Object.prototype.hasOwnProperty.call(siteSettings, domain)) return domain;
+  const lower = String(domain).toLowerCase();
+  const keys = Object.keys(siteSettings);
+  const exact = keys.find((k) => String(k).toLowerCase() === lower);
+  if (exact) return exact;
+  const suffix = keys
+    .filter((k) => lower === String(k).toLowerCase() || lower.endsWith("." + String(k).toLowerCase()))
+    .sort((a, b) => b.length - a.length)[0];
+  return suffix || null;
+}
+
+function isUrlBlocked(url, entries) {
+  if (!url || !entries || !entries.length) return false;
+  if (Shared.isUrlBlockedByEntries) {
+    try { return Shared.isUrlBlockedByEntries(url, entries); } catch { /* fallback */ }
+  }
+  const domain = extractRootDomain(url);
+  return Boolean(domain && entries.includes(domain));
+}
+
+function sendTabMessage(tabId, message) {
+  try {
+    if (Shared.tabsSendMessage) return Shared.tabsSendMessage(tabId, message).catch(() => {});
+    return new Promise((resolve) => {
+      try {
+        browserApi.tabs.sendMessage(tabId, message, () => {
+          if (browserApi.runtime && browserApi.runtime.lastError) { /* ignore harmless */ }
+          resolve();
+        });
+      } catch { resolve(); }
+    });
+  } catch { return Promise.resolve(); }
+}
 
 function storageGet(keys) {
   return new Promise((resolve, reject) => {
@@ -48,6 +98,58 @@ function extractRootDomain(url) {
   domain = domain.split("/")[0];
   domain = domain.split(":")[0];
   return domain.toLowerCase();
+}
+
+function applyAudioControlState(state = {}) {
+  const fallbackMax = Shared.MAX_DB !== undefined ? Shared.MAX_DB : 32;
+  const fallbackMin = Shared.MIN_DB !== undefined ? Shared.MIN_DB : -32;
+  const rawMax = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : fallbackMax;
+  cached.maxDb = Math.min(fallbackMax, Math.max(fallbackMin, rawMax));
+  cached.boostLimited = Boolean(state.boostLimited) || cached.maxDb <= 0;
+  const note = cached.limitNote || document.querySelector("#volume-limit-note");
+  if (note) {
+    if (state.limitation) note.textContent = state.limitation;
+    note.classList.toggle("hidden", !cached.boostLimited);
+  }
+  if (state.muted !== undefined) cached.muted = Boolean(state.muted);
+  const dial = cached.dial || document.querySelector("#volume-dial");
+  if (dial && Number(dial.dataset.value) > cached.maxDb) {
+    setVolumeDisplayOnly(cached.maxDb);
+  }
+}
+
+async function refreshAudioControlState(tab) {
+  if (!tab || tab.id === undefined) return null;
+  try {
+    let response = null;
+    if (Shared.tabsSendMessage && Shared.TOP_FRAME_OPTIONS !== undefined) {
+      response = await Shared.tabsSendMessage(tab.id, { command: "getAudioControlState" }, Shared.TOP_FRAME_OPTIONS).catch(() => null);
+    } else {
+      response = await new Promise((resolve) => {
+        try {
+          browserApi.tabs.sendMessage(tab.id, { command: "getAudioControlState" }, (r) => resolve(r || null));
+        } catch { resolve(null); }
+      });
+    }
+    const state = response && response.response ? response.response : null;
+    if (state) {
+      applyAudioControlState(state);
+      if (state.volume !== undefined) setVolumeDisplayOnly(state.volume);
+    }
+    return state;
+  } catch { return null; }
+}
+
+function setVolumeDisplayOnly(dB) {
+  const normalized = Math.min(normalizeDb(dB), cached.maxDb);
+  const dial = cached.dial || document.querySelector("#volume-dial");
+  const text = cached.volumeText || document.querySelector("#volume-text");
+  if (dial) {
+    dial.dataset.value = String(normalized);
+    try { updateDialRotation(dial, normalized); } catch { /* dial not ready */ }
+  }
+  if (text) text.value = formatValue(normalized);
+  return normalized;
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -132,10 +234,9 @@ function handleTabs(tabs) {
             });
             let isExcluded = false;
             if (data.whitelistMode) {
-              const remembered = Object.keys(data.siteSettings || {});
-              isExcluded = !remembered.includes(domain);
+              isExcluded = !getSettingsKey(data.siteSettings || {}, domain);
             } else {
-              isExcluded = data.fqdns.includes(domain);
+              isExcluded = isUrlBlocked(currentTab.url, data.fqdns || []);
             }
             if (isExcluded) showError({ type: "exclusion" });
           } catch (e) {
@@ -175,7 +276,7 @@ async function updateEnableSwitch(tab) {
       return;
     }
 
-    let isExcluded = data.fqdns.includes(domain);
+    let isExcluded = isUrlBlocked(tab.url, data.fqdns || []);
     // Invert logic: Excluded means OFF (not active), Included means ON (active)
     let isActive = !isExcluded;
 
@@ -221,31 +322,21 @@ async function toggleSitePermission(domain, shouldExclude, tabId) {
       // Edit remembered sites instead of an arbitrary whitelist
       const sd = await storageGet({ siteSettings: {} });
       const settings = sd.siteSettings || {};
+      const key = getSettingsKey(settings, domain) || domain;
       if (shouldExclude) {
-        if (settings[domain]) {
-          delete settings[domain];
+        if (settings[key]) {
+          delete settings[key];
           await storageSet({ siteSettings: settings });
         }
       } else {
-        if (!settings[domain]) {
-          settings[domain] = { volume: 0, mono: false };
+        if (!getSettingsKey(settings, domain)) {
+          settings[domain] = { volume: 0, mono: false, muted: false };
           await storageSet({ siteSettings: settings });
           // Try to apply settings immediately to the tab that requested the change
           if (tabId) {
-            try {
-              browserApi.tabs.sendMessage(
-                tabId,
-                { command: "setVolume", dB: settings[domain].volume },
-                () => { },
-              );
-              browserApi.tabs.sendMessage(
-                tabId,
-                { command: "setMono", mono: Boolean(settings[domain].mono) },
-                () => { },
-              );
-            } catch (e) {
-              /* ignore */
-            }
+            await sendTabMessage(tabId, { command: "setVolume", dB: settings[domain].volume });
+            await sendTabMessage(tabId, { command: "setMono", mono: Boolean(settings[domain].mono) });
+            await sendTabMessage(tabId, { command: "setMute", muted: false });
           }
         }
       }
@@ -254,8 +345,29 @@ async function toggleSitePermission(domain, shouldExclude, tabId) {
       if (shouldExclude) {
         if (!newData.fqdns.includes(domain)) newData.fqdns.push(domain);
       } else {
-        const idx = newData.fqdns.indexOf(domain);
-        if (idx > -1) newData.fqdns.splice(idx, 1);
+        try {
+          const tab = tabId !== undefined ? await new Promise((resolve) => {
+            try {
+              browserApi.tabs.get(tabId, (t) => resolve(t || null));
+            } catch { resolve(null); }
+          }) : null;
+          const url = tab && tab.url ? tab.url : null;
+          if (url && Shared.entriesBlockingUrl) {
+            const blocking = Shared.entriesBlockingUrl(url, newData.fqdns);
+            if (blocking && blocking.length) {
+              newData.fqdns = newData.fqdns.filter((e) => !blocking.includes(e));
+            } else {
+              const idx = newData.fqdns.indexOf(domain);
+              if (idx > -1) newData.fqdns.splice(idx, 1);
+            }
+          } else {
+            const idx = newData.fqdns.indexOf(domain);
+            if (idx > -1) newData.fqdns.splice(idx, 1);
+          }
+        } catch {
+          const idx = newData.fqdns.indexOf(domain);
+          if (idx > -1) newData.fqdns.splice(idx, 1);
+        }
       }
       await storageSet({ fqdns: newData.fqdns });
     }
@@ -308,63 +420,62 @@ async function saveSiteSettings(tab) {
 
     const data = await storageGet({ siteSettings: {} });
     data.siteSettings = data.siteSettings || {};
-    data.siteSettings[domain] = {
-      volume: parseInt(volumeDial?.dataset.value || 0, 10) || 0,
+    const settingsKey = getSettingsKey(data.siteSettings, domain) || domain;
+    const prevMuted = data.siteSettings[settingsKey] ? Boolean(data.siteSettings[settingsKey].muted) : Boolean(cached.muted);
+    data.siteSettings[settingsKey] = {
+      volume: Math.min(normalizeDb(parseInt(volumeDial?.dataset.value || 0, 10) || 0), cached.maxDb),
       mono: Boolean(monoBtn?.classList.contains("active")),
+      muted: prevMuted,
     };
     await storageSet({ siteSettings: data.siteSettings });
 
-    // Notify the content script in this tab immediately so volume/mono are applied without waiting
-    if (tab && tab.id) {
-      try {
-        browserApi.tabs.sendMessage(
-          tab.id,
-          { command: "setVolume", dB: data.siteSettings[domain].volume },
-          () => {
-            if (browserApi.runtime && browserApi.runtime.lastError) {
-              // It's possible the content script hasn't injected into the page yet; ignore harmless errors.
-            }
-          },
-        );
-        browserApi.tabs.sendMessage(
-          tab.id,
-          { command: "setMono", mono: Boolean(data.siteSettings[domain].mono) },
-          () => {
-            if (browserApi.runtime && browserApi.runtime.lastError) {
-              // It's possible the content script hasn't injected into the page yet; ignore harmless errors.
-            }
-          },
-        );
-      } catch (e) {
-        // ignore messaging errors
-      }
+    // Notify the content script in this tab immediately so volume/mono/mute are applied without waiting
+    if (tab && tab.id !== undefined) {
+      await sendTabMessage(tab.id, { command: "setVolume", dB: data.siteSettings[settingsKey].volume });
+      await sendTabMessage(tab.id, { command: "setMono", mono: Boolean(data.siteSettings[settingsKey].mono) });
+      await sendTabMessage(tab.id, { command: "setMute", muted: Boolean(data.siteSettings[settingsKey].muted) });
     }
   } catch (e) {
     handleError(e);
   }
 }
 
-async function setVolume(dB, tab) {
+async function setVolume(dB, tab, options = {}) {
+  const normalized = Math.min(normalizeDb(dB), cached.maxDb);
   const dial = cached.dial || document.querySelector("#volume-dial");
   const text = cached.volumeText || document.querySelector("#volume-text");
 
   if (dial) {
-    dial.dataset.value = String(dB);
-    updateDialRotation(dial, dB);
+    dial.dataset.value = String(normalized);
+    updateDialRotation(dial, normalized);
   }
-  if (text) text.value = formatValue(dB);
+  if (text) text.value = formatValue(normalized);
 
-  if (tab) {
-    browserApi.tabs.sendMessage(
-      tab.id,
-      { command: "setVolume", dB: Number(dB) },
-      (response) => {
-        if (browserApi.runtime.lastError)
-          handleError(browserApi.runtime.lastError);
-      },
-    );
+  if (tab && tab.id !== undefined) {
+    await sendTabMessage(tab.id, { command: "setVolume", dB: normalized });
+    if (options.showFeedback !== false && Shared.browserApi) {
+      // Badge feedback is optional; ignore if background does not support it.
+      try {
+        const runtime = Shared.runtimeSendMessage || null;
+        if (runtime) {
+          await runtime({ command: "showNativeVolumeFeedback", tabId: tab.id, dB: normalized, muted: Boolean(cached.muted) }).catch(() => {});
+        }
+      } catch { /* ignore */ }
+    }
+    // Refresh the authoritative verdict so a DRM/clamped response corrects the dial.
+    try {
+      let response = null;
+      if (Shared.tabsSendMessage && Shared.TOP_FRAME_OPTIONS !== undefined) {
+        response = await Shared.tabsSendMessage(tab.id, { command: "getAudioControlState" }, Shared.TOP_FRAME_OPTIONS).catch(() => null);
+      }
+      if (response && response.response) {
+        applyAudioControlState(response.response);
+        if (response.response.volume !== undefined) setVolumeDisplayOnly(response.response.volume);
+      }
+    } catch { /* ignore */ }
     await saveSiteSettings(tab);
   }
+  return normalized;
 }
 
 async function toggleMono(tab) {
@@ -374,14 +485,7 @@ async function toggleMono(tab) {
     monoBtn.classList.toggle("active");
     const isMono = monoBtn.classList.contains("active");
 
-    browserApi.tabs.sendMessage(
-      tab.id,
-      { command: "setMono", mono: isMono },
-      (res) => {
-        if (browserApi.runtime.lastError)
-          handleError(browserApi.runtime.lastError);
-      },
-    );
+    await sendTabMessage(tab.id, { command: "setMono", mono: isMono });
     await saveSiteSettings(tab);
   }
 }
@@ -400,8 +504,9 @@ async function toggleRemember(tab) {
         await saveSiteSettings(tab);
       } else {
         const data = await storageGet({ siteSettings: {} });
-        if (data.siteSettings && data.siteSettings[domain]) {
-          delete data.siteSettings[domain];
+        const key = getSettingsKey(data.siteSettings || {}, domain);
+        if (data.siteSettings && key) {
+          delete data.siteSettings[key];
           await storageSet({ siteSettings: data.siteSettings });
         }
       }
@@ -439,6 +544,7 @@ function showError(error) {
 
 async function initializeControls(tab) {
   if (!tab) return;
+  cached.activeTab = tab;
 
   const volumeDial = document.querySelector("#volume-dial");
   const volumeText = document.querySelector("#volume-text");
@@ -451,16 +557,19 @@ async function initializeControls(tab) {
   cached.monoBtn = monoBtn;
   cached.rememberBtn = rememberBtn;
   cached.powerBtn = powerBtn;
+  cached.limitNote = document.querySelector("#volume-limit-note");
 
   if (volumeDial) {
     volumeDial.dataset.value = "0";
   }
 
+  applyAudioControlState({ maxDb: 32, boostLimited: false });
+
   if (volumeText) {
     volumeText.addEventListener("change", () => {
-      const val = volumeText.value.match(/\d+/)?.[0];
-      if (val) {
-        const percentage = Math.max(0, Math.min(200, parseInt(val)));
+      const val = volumeText.value.match(/-?\d+/)?.[0];
+      if (val !== undefined) {
+        const percentage = Math.max(0, Math.min(200, parseInt(val, 10)));
         const dB = Math.round((percentage / 200) * 64 - 32);
         setVolume(dB, tab);
       }
@@ -475,22 +584,35 @@ async function initializeControls(tab) {
   const domain = extractRootDomain(tab.url);
   if (!domain) return;
 
+  // Keep the boost-limit verdict live while the popup is open (DRM handshake
+  // can complete after playback starts). Popup teardown clears the timer.
+  const verdictTimer = setInterval(() => {
+    refreshAudioControlState(tab).catch(() => {});
+  }, 1000);
+  window.addEventListener("unload", () => clearInterval(verdictTimer), { once: true });
+
   try {
+    const audioState = await refreshAudioControlState(tab);
     const data = await storageGet({ siteSettings: {} });
-    const saved = (data.siteSettings || {})[domain];
+    const settingsKey = getSettingsKey(data.siteSettings || {}, domain);
+    const saved = settingsKey ? data.siteSettings[settingsKey] : null;
     if (saved) {
       if (rememberBtn) rememberBtn.classList.add("active");
-      if (saved.volume !== undefined) setVolume(saved.volume, null);
+      if (saved.muted !== undefined) cached.muted = Boolean(saved.muted);
       if (saved.mono !== undefined && monoBtn)
-        monoBtn.classList.toggle("active", saved.mono);
-    } else {
+        monoBtn.classList.toggle("active", Boolean(saved.mono));
+      if (saved.volume !== undefined) setVolumeDisplayOnly(saved.volume);
+      await sendTabMessage(tab.id, { command: "setMono", mono: Boolean(saved.mono) });
+      await sendTabMessage(tab.id, { command: "setMute", muted: Boolean(saved.muted) });
+      if (saved.volume !== undefined) await setVolume(saved.volume, tab, { showFeedback: false });
+    } else if (!audioState) {
       browserApi.tabs.sendMessage(
         tab.id,
         { command: "getVolume" },
         (response) => {
           if (browserApi.runtime.lastError) return;
           if (response && response.response !== undefined) {
-            setVolume(response.response, null);
+            setVolumeDisplayOnly(response.response);
           }
         },
       );
@@ -627,9 +749,9 @@ function initializeDial(dial) {
 
   function handleWheel(e) {
     e.preventDefault();
-    const currentVolume = parseInt(dial.dataset.value || 0);
+    const currentVolume = parseInt(dial.dataset.value || 0, 10) || 0;
     const delta = e.deltaY > 0 ? -2 : 2;
-    const newVolume = Math.max(-32, Math.min(32, currentVolume + delta));
+    const newVolume = Math.max(-32, Math.min(cached.maxDb, currentVolume + delta));
 
     dial.dataset.value = newVolume;
     updateDialRotation(dial, newVolume);

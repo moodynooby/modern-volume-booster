@@ -4,8 +4,27 @@ const browserApi =
     : typeof chrome !== "undefined"
       ? chrome
       : null;
+const SharedOpts = (typeof globalThis !== "undefined" && globalThis.VolumeControlShared) || {};
+
+function normalizeDbOpt(v) {
+  if (SharedOpts.normalizeDb) return SharedOpts.normalizeDb(v);
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-32, Math.min(32, Math.round(n)));
+}
+
+function normalizeDomainOpt(v) {
+  if (SharedOpts.normalizeDomainInput) return SharedOpts.normalizeDomainInput(v);
+  return String(v == null ? "" : v).trim().toLowerCase();
+}
+
+function normalizeBlocklistOpt(v) {
+  if (SharedOpts.normalizeBlocklistEntryInput) return SharedOpts.normalizeBlocklistEntryInput(v);
+  return String(v == null ? "" : v).trim().toLowerCase();
+}
 
 function formatDb(v) {
+  if (SharedOpts.formatDb) return SharedOpts.formatDb(v);
   const n = Number(v);
   if (Number.isNaN(n)) return "";
   return `${n >= 0 ? "+" : ""}${n} dB`;
@@ -55,7 +74,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
 
   // Commit rename on blur or Enter
   const commitRename = async () => {
-    const newName = (info.value || "").trim();
+    const newName = normalizeDomainOpt(info.value);
     if (!newName) {
       alert("Site cannot be empty.");
       info.value = domain;
@@ -91,35 +110,31 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
   settingGroup.appendChild(volInput);
 
   // Initialize formatted value (shows e.g. '+3 dB') and store numeric separately
-  const initialVol =
-    settings && settings.volume !== undefined
-      ? Number(settings.volume) || 0
-      : 0;
+  const initialVol = normalizeDbOpt(settings && settings.volume !== undefined ? settings.volume : 0);
   volInput.value = formatDb(initialVol);
   volInput.dataset.numericValue = String(initialVol);
 
   // When focusing, show only the numeric part so user can edit
   volInput.addEventListener("focus", () => {
-    volInput.value = String(parseInt(volInput.dataset.numericValue, 10) || 0);
+    volInput.value = String(normalizeDbOpt(volInput.dataset.numericValue));
     volInput.select();
   });
 
   // Keep numericValue up-to-date while typing
   volInput.addEventListener("input", () => {
-    const parsed = parseInt(volInput.value, 10);
-    if (!Number.isNaN(parsed)) volInput.dataset.numericValue = String(parsed);
+    const parsed = Number(volInput.value);
+    if (Number.isFinite(parsed)) volInput.dataset.numericValue = String(normalizeDbOpt(parsed));
   });
 
   // On blur/change, format back to '# dB' and commit
   const commitVol = () => {
-    const v = parseInt(volInput.value, 10);
-    const numeric = Number.isNaN(v)
-      ? Number(volInput.dataset.numericValue) || 0
-      : v;
+    const v = Number(volInput.value);
+    const numeric = Number.isFinite(v) ? normalizeDbOpt(v) : normalizeDbOpt(volInput.dataset.numericValue);
     volInput.dataset.numericValue = String(numeric);
     volInput.value = formatDb(numeric);
     const monoCheckbox = settingGroup.querySelector('.mono-label input[type="checkbox"]');
-    onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox?.checked) });
+    const muteCheckbox = settingGroup.querySelector('.mute-label input[type="checkbox"]');
+    onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox?.checked), muted: Boolean(muteCheckbox?.checked) });
   };
 
   volInput.addEventListener("blur", commitVol);
@@ -137,13 +152,36 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
   monoLabel.appendChild(monoText);
 
   monoCheckbox.addEventListener("change", () => {
+    const muteCheckbox = settingGroup.querySelector('.mute-label input[type="checkbox"]');
     onUpdate(domain, {
-      volume: parseInt(volInput.value, 10) || 0,
+      volume: normalizeDbOpt(volInput.dataset.numericValue),
       mono: Boolean(monoCheckbox.checked),
+      muted: Boolean(muteCheckbox?.checked),
     });
   });
 
   settingGroup.appendChild(monoLabel);
+
+  // Mute checkbox (upstream data model; same pill style, no visual redesign)
+  const muteLabel = document.createElement("label");
+  muteLabel.className = "mono-label mute-label";
+  const muteCheckbox = document.createElement("input");
+  muteCheckbox.type = "checkbox";
+  muteCheckbox.checked = Boolean(settings && settings.muted);
+  muteLabel.appendChild(muteCheckbox);
+  const muteText = document.createElement("span");
+  muteText.textContent = "Mute";
+  muteLabel.appendChild(muteText);
+
+  muteCheckbox.addEventListener("change", () => {
+    onUpdate(domain, {
+      volume: normalizeDbOpt(volInput.dataset.numericValue),
+      mono: Boolean(monoCheckbox.checked),
+      muted: Boolean(muteCheckbox.checked),
+    });
+  });
+
+  settingGroup.appendChild(muteLabel);
 
   controls.appendChild(settingGroup);
 
@@ -197,13 +235,14 @@ async function renderMemoryList() {
         },
         async (domain, newVal) => {
           settings[domain] = {
-            volume: Number(newVal.volume) || 0,
+            volume: normalizeDbOpt(newVal.volume),
             mono: !!newVal.mono,
+            muted: !!newVal.muted,
           };
           await storageSet({ siteSettings: settings });
         },
         async (oldDomain, newDomain) => {
-          const nd = (newDomain || "").trim();
+          const nd = normalizeDomainOpt(newDomain);
           if (!nd) {
             alert("Site cannot be empty.");
             return;
@@ -379,7 +418,7 @@ async function initOptions() {
 
   if (addBtn && newFqdnInput) {
     addBtn.addEventListener("click", async () => {
-      const v = (newFqdnInput.value || "").trim();
+      const v = normalizeBlocklistOpt(newFqdnInput.value);
       if (!v) return;
       const data = await storageGet({
         fqdns: [],
@@ -391,7 +430,7 @@ async function initOptions() {
         const sd = await storageGet({ siteSettings: {} });
         const settings = sd.siteSettings || {};
         if (!settings[v]) {
-          settings[v] = { volume: 0, mono: false };
+          settings[v] = { volume: 0, mono: false, muted: false };
           await storageSet({ siteSettings: settings });
         }
       } else {
@@ -410,7 +449,7 @@ async function initOptions() {
   const newRememberedInput = document.getElementById("newRememberedSite");
   if (addRememberedBtn && newRememberedInput) {
     addRememberedBtn.addEventListener("click", async () => {
-      const v = (newRememberedInput.value || "").trim();
+      const v = normalizeDomainOpt(newRememberedInput.value);
       if (!v) return;
       const data = await storageGet({ siteSettings: {} });
       const settings = data.siteSettings || {};
@@ -418,7 +457,7 @@ async function initOptions() {
         alert("A remembered entry for that site already exists.");
         return;
       }
-      settings[v] = { volume: 0, mono: false };
+      settings[v] = { volume: 0, mono: false, muted: false };
       await storageSet({ siteSettings: settings });
       newRememberedInput.value = "";
     });

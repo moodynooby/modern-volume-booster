@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "BoomRotary",
-  "version": "2.2",
+  "version": "2.3",
   "description": "Modern Volume Boost or Reduce Volume MORE then the limit.",
   "homepage_url": "https://github.com/moodynooby/modern-vol-booster",
+  "minimum_chrome_version": "121",
   "icons": {
     "96": "icon.svg"
   },
@@ -19,6 +20,10 @@
     "default_title": "BoomRotary",
     "default_popup": "popup.html"
   },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["shared.js", "background.js"]
+  },
   "content_scripts": [
     {
       "matches": [
@@ -27,10 +32,28 @@
         "file:///*"
       ],
       "js": [
+        "page-audio-hook.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": [
+        "shared.js",
         "cs.js"
       ],
+      "run_at": "document_start",
       "all_frames": true,
-      "match_about_blank": true
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "options_ui": {
@@ -40,6 +63,33 @@
   "commands": {
     "_execute_action": {
       "description": "Open volume control"
+    },
+    "volume-up": {
+      "suggested_key": {
+        "default": "Alt+Shift+Up"
+      },
+      "description": "Increase volume by 1 dB"
+    },
+    "volume-down": {
+      "suggested_key": {
+        "default": "Alt+Shift+Down"
+      },
+      "description": "Decrease volume by 1 dB"
+    },
+    "volume-reset": {
+      "suggested_key": {
+        "default": "Alt+Shift+0"
+      },
+      "description": "Reset volume to 0 dB"
+    },
+    "toggle-mono": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Toggle mono audio"
+    },
+    "toggle-mute": {
+      "description": "Toggle mute"
     }
   },
   "browser_specific_settings": {
@@ -50,7 +100,7 @@
           "none"
         ]
       },
-      "strict_min_version": "109.0"
+      "strict_min_version": "128.0"
     }
   }
 }

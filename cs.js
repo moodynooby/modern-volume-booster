@@ -1,4 +1,30 @@
-const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
+const {
+    browserApi: browserAPI,
+    MAX_DB,
+    normalizeDb,
+    getGainValue,
+    storageGet,
+    storageSet,
+    domainMatchesSaved,
+    isUrlBlockedByEntries,
+    purgeLegacyDefaultBlocklist,
+    getSiteSettingsKey,
+    BRIDGE_VERSION,
+    BOOST_LIMIT_NOTE
+} = globalThis.VolumeControlShared;
+const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
+const PAGE_BRIDGE_SOURCE = "volume-control-extension";
+const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
+const PAGE_AUDIO_MANAGED_ATTR = "vcPageAudioManaged";
+const PAGE_BRIDGE_RESYNC_MS = 5000;
+const PAGE_BRIDGE_HEARTBEAT_MS = 3000;
+const BOOST_LIMIT_NOTES = {
+    "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
+    "restricted": "Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
+    "route-failed": "Limited because the page blocked or already owns the audio route. Fallback volume control can still lower volume, but boosting and mono may be unavailable.",
+    "fallback": BOOST_LIMIT_NOTE
+};
+let pageBridgeResyncInterval = null;
 
 const tc = {
   settings: {
@@ -8,9 +34,17 @@ const tc = {
   vars: {
     dB: 0,
     mono: false,
+    muted: false,
     audioCtx: undefined,
     gainNode: undefined,
-    isBlocked: false
+    isBlocked: false,
+    pendingInit: false,
+    // Media elements successfully hooked into our AudioContext (source.connect'd).
+    mediaElements: new Set(),
+    // All known media elements on the page (hooked, fallback, or page-managed).
+    // Populated by registerMediaElement and init. Used by applyState to avoid
+    // querySelectorAll on every state change.
+    knownMediaElements: new Set()
   }
 };
 
@@ -27,12 +61,15 @@ if (browserAPI) {
                 sendResponse({ status: "active" });
                 break;
             case "setVolume":
-                tc.vars.dB = msg.dB;
+                tc.vars.dB = normalizeDbForCurrentMedia(msg.dB);
                 applyState();
-                sendResponse({});
+                sendResponse({ response: getAudioControlState() });
                 break;
             case "getVolume":
-                sendResponse({ response: tc.vars.dB });
+                sendResponse({ response: getAudioControlState().volume });
+                break;
+            case "getAudioControlState":
+                sendResponse({ response: getAudioControlState() });
                 break;
             case "setMono":
                 tc.vars.mono = msg.mono;
@@ -42,36 +79,698 @@ if (browserAPI) {
             case "getMono":
                 sendResponse({ response: tc.vars.mono });
                 break;
+            case "setMute":
+                tc.vars.muted = Boolean(msg.muted);
+                applyState();
+                // Build the response without re-running enforceBoostLimit;
+                // boost limit is unchanged by a mute toggle, and applyState()
+                // already synced the page-audio hook above.
+                {
+                    const limit = getBoostLimitInfo();
+                    sendResponse({
+                        response: {
+                            volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
+                            mono: tc.vars.mono,
+                            muted: Boolean(tc.vars.muted),
+                            boostLimited: limit.boostLimited,
+                            maxDb: limit.maxDb,
+                            limitationReason: limit.reason,
+                            limitation: limit.note
+                        }
+                    });
+                }
+                break;
+            case "getMute":
+                sendResponse({ response: tc.vars.muted });
+                break;
         }
         return true;
     });
 }
 
-function getGainValue(dB) {
-    const n = Number(dB);
-    if (Number.isNaN(n)) return 1.0;
-    return Math.pow(10, n / 20);
+function needsAudioRoute() {
+    return !tc.vars.isBlocked && (tc.vars.muted || tc.vars.mono || getGainValue(tc.vars.dB) > 1);
+}
+
+function getMediaSourceUrl(element) {
+    const directSrc = element.currentSrc || element.src;
+    if (directSrc) return directSrc;
+
+    try {
+        const source = element.querySelector && element.querySelector("source[src]");
+        return source ? source.src : "";
+    } catch (e) {
+        return "";
+    }
+}
+
+function isLikelyCrossOriginMedia(element) {
+    const src = getMediaSourceUrl(element);
+    if (!src || element.crossOrigin) return false;
+
+    try {
+        const url = new URL(src, document.baseURI);
+        return url.protocol.indexOf("http") === 0 && url.origin !== window.location.origin;
+    } catch (e) {
+        return false;
+    }
+}
+
+function isLikelyRestrictedMedia(element) {
+    if (!element) return false;
+
+    try {
+        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
+        if (element.mediaKeys) return true;
+        if (element.webkitKeys) return true;
+    } catch (e) {
+        return false;
+    }
+
+    return false;
+}
+
+function pageUsesEme() {
+    try {
+        return Boolean(document.documentElement && document.documentElement.dataset.vcPageUsesEme === "true");
+    } catch (e) {
+        return false;
+    }
+}
+
+// Engine-aware EME policy — must stay in sync with the hook's twin.
+// Chromium-family browsers silence MediaElementAudioSourceNode output for
+// encrypted content (routing DRM there = permanent silence), so DRM signals
+// block routing and clamp the verdict. Gecko (Firefox) explicitly supports
+// capturing EME media audio through WebAudio (Mozilla bug 1331763, Firefox
+// 55+: "creating a MediaElementSource on a media element should always
+// succeed"; only *video* capture is blocked), so on Firefox DRM media is
+// fully boostable. Cross-origin taint silences routed audio in every engine
+// (spec) and stays enforced on both.
+//
+// Detection order (fixed in v6.13): a UA containing "Firefox/" proves Gecko
+// FIRST — navigator.userAgentData is only consulted afterwards. The old
+// order treated any userAgentData shim as proof of Chromium, which would
+// misclassify a future Firefox that grows one.
+function isGeckoRuntime() {
+    try {
+        const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+        if (ua.indexOf("Firefox/") !== -1) return true;
+        if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
+        return false;
+    } catch (e) {
+        return false;
+    }
+}
+const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
+
+// Per-element DRM evidence (sticky): the `encrypted` event fired, or the
+// site attached MediaKeys. Shared with the hook's world through dataset
+// flags + the standard element.mediaKeys property.
+function elementDrmEvidence(element) {
+    if (!element) return false;
+    try {
+        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
+        if (element.mediaKeys) return true;
+        if (element.webkitKeys) return true;
+    } catch (e) {
+        return false;
+    }
+    return false;
+}
+
+// Gecko keys-attached marker: on Gecko, DRM media becomes routable only
+// AFTER setMediaKeys() succeeds (Gecko throws NotSupportedError from
+// setMediaKeys when the element is already audio-captured — routing first
+// would break the site's player). The hook writes this dataset flag when
+// its setMediaKeys patch sees the native call succeed.
+function elementEmeKeysAttached(element) {
+    if (!element) return false;
+    try {
+        if (element.mediaKeys) return true;
+        if (element.dataset && element.dataset.vcEmeKeysAttached === "true") return true;
+    } catch (e) {
+        return false;
+    }
+    return false;
+}
+
+function pageCreatedMediaKeys() {
+    try {
+        return Boolean(document.documentElement && document.documentElement.dataset.vcPageEmeActive === "true");
+    } catch (e) {
+        return false;
+    }
+}
+
+// Pending EME suspect: the page was granted EME access (probe) and the
+// element plays a blob: (MSE) source without per-element DRM evidence.
+// Routing is refused until DECRYPTION PROOF (v6.14): the element's
+// currentTime actually advancing. EME content cannot decode without
+// MediaKeys attached, and every attachment path is visible (the hook's
+// MAIN-world setMediaKeys patches, element.mediaKeys/webkitKeys, the
+// 'encrypted' event) — so progress + zero evidence means clear media
+// (Plex, issue #70). The hook's createMediaKeys patch bumps a
+// documentElement vcEmeResetSeq counter (shared DOM) when keys become
+// imminent; the mirror proof recorded here is invalidated on a seq change.
+// The verdict itself stays evidence-only (see isProbablyProtectedMedia).
+const EME_PENDING_MIN_PROGRESS_S = 0.01;
+const emePending = new WeakMap(); // element -> { progress, lastTime, seq }
+
+function isPendingEmeSuspect(element) {
+    // Probe-level gate: a page granted EME access may attach keys to this
+    // blob: element at any moment; refuse routing until decryption proof
+    // or DRM evidence arrives (see the hook's twin — the verdict itself
+    // stays evidence-only).
+    if (!pageUsesEme()) return false;
+    const src = getMediaSourceUrl(element);
+    return Boolean(src) && src.indexOf("blob:") === 0;
+}
+
+function emeResetSeq() {
+    try {
+        const v = document.documentElement && document.documentElement.dataset.vcEmeResetSeq;
+        return Number(v) || 0;
+    } catch (e) {
+        return 0;
+    }
+}
+
+function resetEmePending(element) {
+    emePending.delete(element);
+}
+
+function emePendingCleared(element) {
+    // Decryption-proof gate, mirroring the hook's emePendingCleared.
+    // Observes currentTime on every evaluation; a positive delta (while
+    // not seeking) with zero DRM evidence proves the element is decoding
+    // clear media. The seq check invalidates the recorded proof when the
+    // hook reports imminent key attachment (createMediaKeys) or the
+    // element's source changed.
+    let rec = emePending.get(element);
+    const seq = emeResetSeq();
+    if (!rec || rec.seq !== seq) {
+        rec = { progress: false, lastTime: undefined, seq };
+        emePending.set(element, rec);
+    }
+    if (rec.progress) return true;
+    let now = 0;
+    let seeking = false;
+    try {
+        now = Number(element.currentTime);
+        if (typeof element.seeking === "boolean") seeking = element.seeking;
+    } catch (e) {
+        return false;
+    }
+    if (!Number.isFinite(now)) return false;
+    const last = rec.lastTime;
+    rec.lastTime = now;
+    if (last !== undefined && !seeking && now > last + EME_PENDING_MIN_PROGRESS_S) {
+        rec.progress = true;
+        return true;
+    }
+    return false;
+}
+
+// VERDICT gate (the popup note + slider clamp): "restricted" requires
+// per-element DRM evidence AND an engine that silences routed EME audio.
+// Page-level EME *probes* and the pending window are ROUTING gates (see
+// shouldRefuseMediaRouting), not verdict restrictions — Plex probes DRM
+// support at startup while playing clear direct-play content, which must
+// not produce a restriction note (issue #70). On Gecko, DRM is fully
+// boostable (bug 1331763), so the verdict never restricts.
+function isProbablyProtectedMedia(element) {
+    if (!element || !EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
+    return elementDrmEvidence(element);
+}
+
+// ROUTING gate: decides whether this element must NOT be routed through
+// WebAudio right now. Mirrors the hook's isLikelyDrmMedia.
+function shouldRefuseMediaRouting(element) {
+    if (!element) return false;
+    if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
+        if (elementDrmEvidence(element)) return true;
+        if (!isPendingEmeSuspect(element)) return false;
+        return !emePendingCleared(element);
+    }
+    // Gecko: EME audio flows through WebAudio, but only route once keys are
+    // attached — capturing first makes the site's setMediaKeys() throw.
+    if (elementEmeKeysAttached(element)) return false;
+    if (elementDrmEvidence(element)) return true;
+    if (!isPendingEmeSuspect(element)) return false;
+    return !emePendingCleared(element);
+}
+
+function isPageAudioManaged(element) {
+    try {
+        return Boolean(element && element.dataset && element.dataset[PAGE_AUDIO_MANAGED_ATTR] === "true");
+    } catch (e) {
+        return false;
+    }
+}
+
+// The page-audio hook (MAIN world) tracks every media element it claims —
+// including ones this content script can never see with
+// document.querySelectorAll: detached players (treblo.com and suno.com
+// create <audio> via createElement/new Audio and never append it to the DOM)
+// and elements living inside shadow DOM. The hook publishes an aggregate
+// restriction verdict on the documentElement so this world's boost-limit
+// logic can include them. Values: "restricted" (DRM) or "cross-origin".
+function getHookPageRestriction() {
+    try {
+        const value = document.documentElement && document.documentElement.dataset.vcPageMediaRestriction;
+        if (value === "restricted" || value === "cross-origin") return value;
+    } catch (e) {}
+    return "";
+}
+
+// Severity ranking used when merging restriction verdicts from several
+// sources (document scan, hook aggregate, iframe reports). DRM restriction
+// outranks everything: routing such media is a one-way trip to silence.
+function reasonSeverity(reason) {
+    if (reason === "restricted") return 3;
+    if (reason === "cross-origin" || reason === "route-failed") return 2;
+    return reason ? 1 : 0;
+}
+
+function makeBoostLimitedResult(reason) {
+    return {
+        boostLimited: true,
+        maxDb: 0,
+        reason,
+        note: BOOST_LIMIT_NOTES[reason] || BOOST_LIMIT_NOTES.fallback
+    };
+}
+
+function getBoostLimitReason(element) {
+    if (!element) return "";
+
+    // DRM status must never be masked by the hooking state: an element we
+    // hooked before its DRM flags appeared is still restricted (and, in
+    // enforcing browsers, already silent). Hiding that from the user is worse
+    // than admitting boost is unavailable. Check protection FIRST.
+    if (isProbablyProtectedMedia(element)) return "restricted";
+
+    if (element.dataset.vcHooked === "true") return "";
+
+    const crossOrigin = isLikelyCrossOriginMedia(element);
+    if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";
+
+    const fallbackReason = element.dataset.vcFallbackReason;
+    if (fallbackReason) return fallbackReason;
+
+    if (crossOrigin) return "cross-origin";
+
+    return "";
+}
+
+// Boost limit cache: avoid running querySelectorAll on every state change.
+// Invalidated by a MutationObserver when audio/video elements are added/removed,
+// and by a TTL to catch async state changes (e.g., mediaKeys being set).
+let boostLimitCache = null;
+let boostLimitCacheTime = 0;
+const BOOST_LIMIT_CACHE_TTL_MS = 1000;
+
+function invalidateBoostLimitCache() {
+    boostLimitCache = null;
+}
+
+function getBoostLimitInfo() {
+    if (tc.vars.isBlocked) return { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
+
+    // Return cached result if still fresh.
+    const now = Date.now();
+    if (boostLimitCache && now - boostLimitCacheTime < BOOST_LIMIT_CACHE_TTL_MS) {
+        return boostLimitCache;
+    }
+
+    let result = { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
+
+    try {
+        // Only check currently-playing elements. A paused or src-less element
+        // shouldn't prevent boost on other elements that are actually playing.
+        // If nothing is playing, don't restrict — the user might be about to
+        // play something, and we don't want to lock the slider based on stale state.
+        for (const el of document.querySelectorAll('audio, video')) {
+            if (!isMediaPlaying(el) && !el.src && !el.currentSrc) continue;
+            const reason = getBoostLimitReason(el);
+            if (reason) {
+                result = makeBoostLimitedResult(reason);
+                break;
+            }
+        }
+    } catch (e) {
+        if (tc.settings.debugMode) log(`boost limit check failed: ${e.message}`, 3);
+    }
+
+    // Merge the hook's aggregate restriction. It covers media this scan can
+    // never see: detached players (never appended to the DOM) and shadow-DOM
+    // elements. Without this, sites like treblo.com silently cap boost at
+    // native volume (their cross-origin audio cannot be routed through
+    // WebAudio) while the popup advertises a full +32 dB range.
+    const hookRestriction = getHookPageRestriction();
+    if (reasonSeverity(hookRestriction) > reasonSeverity(result.reason)) {
+        result = makeBoostLimitedResult(hookRestriction);
+    }
+
+    // Merge verdicts reported by embedded iframes. Their media elements live
+    // in a different document; only their own content script instance can
+    // see them, and they report their verdict here (the top frame) so the
+    // popup — which queries only the top frame — aggregates the whole tab.
+    const frameLimit = getAggregatedFrameLimit();
+    if (frameLimit && reasonSeverity(frameLimit.reason) > reasonSeverity(result.reason)) {
+        result = makeBoostLimitedResult(frameLimit.reason);
+    }
+
+    boostLimitCache = result;
+    boostLimitCacheTime = now;
+    return result;
+}
+
+// ----- Cross-frame boost-limit aggregation --------------------------------
+// Popup/background state queries are answered by the TOP frame only (since
+// v6.9: an unframed tabs.sendMessage resolves with whichever frame responds
+// first, which made the DRM/boost-limit note flicker on udio.com). But DRM or
+// cross-origin media often plays inside an embedded iframe (widget players,
+// embedded players) whose document the top frame cannot scan. Each frame's
+// content script therefore posts its verdict up to the top frame, and the top
+// frame merges the most restrictive live report into its own verdict. Reports
+// expire, so frames that go away relax the verdict deterministically — no
+// response races, no flicker.
+const FRAME_REPORT_TTL_MS = 2500;
+const frameLimitReports = new Map(); // source window -> { reason, ts }
+
+function isTopFrame() {
+    try {
+        return window.top === window;
+    } catch (e) {
+        return false;
+    }
+}
+
+function getAggregatedFrameLimit() {
+    if (!isTopFrame() || frameLimitReports.size === 0) return null;
+    const now = Date.now();
+    let best = null;
+    for (const [source, entry] of Array.from(frameLimitReports)) {
+        if (!source || now - entry.ts > FRAME_REPORT_TTL_MS) {
+            frameLimitReports.delete(source);
+            continue;
+        }
+        if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) {
+            best = entry;
+        }
+    }
+    return best;
+}
+
+function handleFrameLimitReport(event) {
+    // Only the top frame aggregates. Reports come from child windows; a page
+    // script posting to its own window (source === window) is not a frame
+    // report and must not influence the verdict.
+    if (!isTopFrame() || !event.source || event.source === window) return;
+    const data = event.data;
+    if (!data || data.vcFrameBoostLimitVersion !== 1) return;
+    const report = data.vcFrameBoostLimit;
+    if (!report || typeof report.reason !== "string") return;
+
+    const reason = reasonSeverity(report.reason) > 0 ? report.reason : "";
+    const previous = frameLimitReports.get(event.source);
+    frameLimitReports.set(event.source, { reason, ts: Date.now() });
+    if (!previous || previous.reason !== reason) {
+        invalidateBoostLimitCache();
+    }
+}
+
+window.addEventListener("message", handleFrameLimitReport);
+
+// Non-top frames report their verdict to the top frame. Reports post
+// immediately when the verdict CHANGES and otherwise refresh the top frame's
+// TTL entry at half its lifetime (2.5s TTL / 2s heartbeat) — posting
+// unconditionally every second only burned CPU/postMessage volume on
+// iframe-heavy pages with stable verdicts.
+let lastPostedFrameReport = { reason: null, at: 0 };
+function reportFrameBoostLimit() {
+    if (isTopFrame()) return;
+    if (tc.vars.isBlocked) return;
+    try {
+        const limit = getBoostLimitInfo();
+        const now = Date.now();
+        if (limit.reason === lastPostedFrameReport.reason && now - lastPostedFrameReport.at < 2000) return;
+        lastPostedFrameReport = { reason: limit.reason, at: now };
+        window.top.postMessage({
+            vcFrameBoostLimitVersion: 1,
+            vcFrameBoostLimit: {
+                reason: limit.reason,
+                maxDb: limit.maxDb,
+                boostLimited: limit.boostLimited
+            }
+        }, "*");
+    } catch (e) {
+        // window.top can be inaccessible in exotic frame setups; nothing to do.
+    }
+}
+
+if (!isTopFrame()) {
+    reportFrameBoostLimit();
+    setInterval(reportFrameBoostLimit, 1000);
+} else {
+    // Purge expired frame reports on a timer, not only when a verdict is
+    // requested. On a tab that is merely playing audio (no popup/hotkey
+    // activity) getAggregatedFrameLimit is never called; expired entries pin
+    // the REMOVED iframes' Window objects against GC for the tab's lifetime
+    // (ad-refresh loops churn iframes constantly).
+    setInterval(() => {
+        getAggregatedFrameLimit();
+    }, 2500);
+}
+
+function setupBoostLimitObserver() {
+    // Invalidate the boost limit cache when audio/video elements are added or
+    // removed from the DOM, so the next call to getBoostLimitInfo recomputes.
+    if (typeof MutationObserver === 'undefined') return;
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
+                    (node.querySelectorAll && node.querySelector('audio, video'))) {
+                    invalidateBoostLimitCache();
+                    return;
+                }
+            }
+            for (const node of mutation.removedNodes) {
+                if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
+                    (node.querySelectorAll && node.querySelector('audio, video'))) {
+                    invalidateBoostLimitCache();
+                    return;
+                }
+            }
+        }
+    });
+    const startObserving = () => {
+        observer.observe(document.documentElement || document, { childList: true, subtree: true });
+    };
+    if (document.documentElement) {
+        startObserving();
+    } else {
+        document.addEventListener('DOMContentLoaded', startObserving, { once: true });
+    }
+}
+
+function normalizeDbForCurrentMedia(value) {
+    const normalized = normalizeDb(value);
+    const limit = getBoostLimitInfo();
+    return Math.min(normalized, limit.maxDb);
+}
+
+function getAudioControlState() {
+    enforceBoostLimit({ sync: true });
+    const limit = getBoostLimitInfo();
+    return {
+        volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
+        mono: tc.vars.mono,
+        muted: Boolean(tc.vars.muted),
+        boostLimited: limit.boostLimited,
+        maxDb: limit.maxDb,
+        limitationReason: limit.reason,
+        limitation: limit.note
+    };
+}
+
+function enforceBoostLimit(options = {}) {
+    const clamped = normalizeDbForCurrentMedia(tc.vars.dB);
+    if (clamped === tc.vars.dB) return false;
+
+    tc.vars.dB = clamped;
+    if (options.sync) syncPageAudioHook();
+    return true;
+}
+
+function applyFallbackVolume(element, reason = "") {
+    const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+    const limitReason = isProbablyProtectedMedia(element) ? "restricted" : reason;
+
+    try {
+        const currentVolume = (typeof element.volume === 'number') ? element.volume : 1;
+        if (element.dataset.vcFallback !== 'true') {
+            // First time applying fallback; capture original volume.
+            element.__vc_originalVolume = gain > 1 ? 1 : currentVolume;
+        } else {
+            // Already in fallback mode. If the page changed element.volume out
+            // from under us (e.g., the page's own volume slider), update
+            // __vc_originalVolume to reflect the page's intent. Without this,
+            // the captured original can become stale and cause a volume spike
+            // when the route is later established and volume is restored.
+            const origBase = element.__vc_originalVolume !== undefined
+                ? element.__vc_originalVolume
+                : (gain > 1 ? 1 : currentVolume);
+            const expectedScaled = Math.min(1, Math.max(0, origBase * Math.min(gain, 1)));
+            if (Math.abs(currentVolume - expectedScaled) > 0.05) {
+                // Page changed volume; treat current as the new "original".
+                element.__vc_originalVolume = gain > 1 ? 1 : currentVolume;
+            }
+        }
+        element.dataset.vcFallback = 'true';
+    } catch (e) {}
+    if (limitReason) element.dataset.vcFallbackReason = limitReason;
+
+    try {
+        // Native mute: when the extension is muted, set element.muted = true
+        // so the browser can release the OS audio device handle (important for
+        // Bluetooth headphones that stay active while a media element plays).
+        // We still restore __vc_originalVolume below so unmuting is clean.
+        if (tc.vars.muted) {
+            if (element.dataset.vcNativeMuted !== 'true') {
+                element.muted = true;
+                element.dataset.vcNativeMuted = 'true';
+            }
+            if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
+            return;
+        }
+        // Unmute ONLY a native mute WE applied. Blanket-unmuting any muted
+        // element overrode the SITE's own mute (muted autoplay ads, the site's
+        // mute button): our fallback loop has no isAudible gate, so with
+        // attenuation active a site-muted element was force-unmuted.
+        if (element.dataset.vcNativeMuted === 'true') {
+            element.muted = false;
+            delete element.dataset.vcNativeMuted;
+        }
+
+        const baseVolume = element.__vc_originalVolume !== undefined
+            ? element.__vc_originalVolume
+            : (gain > 1 ? 1 : element.volume);
+        const newVol = Math.min(1, Math.max(0, baseVolume * Math.min(gain, 1)));
+        element.volume = newVol;
+        if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
+    } catch (e) {
+        log(`Fallback volume set failed: ${e && e.message}`, 2);
+    }
+}
+
+function clearFallbackVolume(element) {
+    if (!element || element.dataset.vcFallback !== 'true') return;
+
+    try {
+        if (element.__vc_originalVolume !== undefined) {
+            element.volume = element.__vc_originalVolume;
+        }
+        // Clear any native mute WE applied while in fallback mode (only ours —
+        // never the site's own muted element; see applyFallbackVolume).
+        if (element.dataset.vcNativeMuted === 'true') {
+            element.muted = false;
+            delete element.dataset.vcNativeMuted;
+        }
+    } catch (e) {}
+
+    delete element.__vc_originalVolume;
+    delete element.dataset.vcFallback;
+    delete element.dataset.vcFallbackReason;
+    delete element.dataset.vcNativeMuted;
+}
+
+// Track the last state sent to the page-audio hook so we can skip redundant
+// postMessage calls. This prevents the 5-second resync interval and rapid
+// slider movements from triggering unnecessary applyStateToGraphs() /
+// applyStateToMediaElements() cycles on the page, which can cause audio dropouts.
+let lastSyncedPageAudioState = null;
+
+function syncPageAudioHook() {
+    const currentState = {
+        enabled: !tc.vars.isBlocked,
+        dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
+        mono: !tc.vars.isBlocked && tc.vars.mono,
+        muted: !tc.vars.isBlocked && Boolean(tc.vars.muted),
+        debugMode: tc.settings.debugMode
+    };
+
+    // Skip if nothing changed since the last sync.
+    if (lastSyncedPageAudioState &&
+        lastSyncedPageAudioState.enabled === currentState.enabled &&
+        lastSyncedPageAudioState.dB === currentState.dB &&
+        lastSyncedPageAudioState.mono === currentState.mono &&
+        lastSyncedPageAudioState.muted === currentState.muted &&
+        lastSyncedPageAudioState.debugMode === currentState.debugMode) {
+        return;
+    }
+    lastSyncedPageAudioState = currentState;
+
+    try {
+        window.postMessage({
+            source: PAGE_BRIDGE_SOURCE,
+            target: PAGE_BRIDGE_TARGET,
+            command: "setState",
+            version: BRIDGE_VERSION,
+            ...currentState
+        }, "*");
+    } catch (e) {
+        if (tc.settings.debugMode) log(`page audio sync failed: ${e.message}`, 3);
+    }
+}
+
+function sendPageAudioHeartbeat() {
+    // Heartbeat so the page-audio hook knows the content script is still alive.
+    // If this stops (extension disabled/updated), the hook will restore native
+    // audio behavior.
+    try {
+        window.postMessage({
+            source: PAGE_BRIDGE_SOURCE,
+            target: PAGE_BRIDGE_TARGET,
+            command: "heartbeat",
+            version: BRIDGE_VERSION
+        }, "*");
+    } catch (e) {
+        // ignore
+    }
 }
 
 function applyState() {
+    enforceBoostLimit();
+    syncPageAudioHook();
+
     const audioCtx = tc.vars.audioCtx;
     const gainNode = tc.vars.gainNode;
-    const targetGain = getGainValue(tc.vars.dB);
+    const isEnabled = !tc.vars.isBlocked;
+    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB)) : 1.0;
 
     if (gainNode && audioCtx) {
         const now = audioCtx.currentTime;
-        gainNode.gain.value = targetGain;
 
         if (audioCtx.state === 'running') {
             try {
+                // Smooth ramp to avoid audible clicks/spikes when the user drags
+                // the slider rapidly. 15ms is short enough to feel responsive but
+                // long enough to prevent zipper noise.
                 gainNode.gain.cancelScheduledValues(now);
-                gainNode.gain.setValueAtTime(targetGain, now);
+                gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+                gainNode.gain.linearRampToValueAtTime(targetGain, now + 0.015);
             } catch (e) {
                 if (tc.settings.debugMode) log(`applyState schedule failed: ${e.message}`, 2);
             }
+        } else {
+            gainNode.gain.value = targetGain;
         }
 
-        if (tc.vars.mono) {
+        if (isEnabled && tc.vars.mono) {
             gainNode.channelCountMode = "explicit";
             gainNode.channelCount = 1;
         } else {
@@ -80,22 +779,60 @@ function applyState() {
         }
     }
 
-    // Also update any fallback elements where we couldn't hook into WebAudio
+    // Also update media elements that are using direct volume scaling.
+    // Iterate knownMediaElements instead of querySelectorAll to avoid O(n) DOM
+    // scans on every state change. Clean up disconnected elements as we go.
     try {
-        for (const el of document.querySelectorAll('audio, video')) {
-            if (el.dataset.vcFallback === 'true') {
-                try {
-                    const gain = targetGain;
-                    const newVol = Math.min(1, Math.max(0, gain));
-                    el.volume = newVol;
-                } catch (e) {
-                    if (tc.settings.debugMode) log(`applyState fallback update failed: ${e.message}`, 3);
+        const routeNeeded = needsAudioRoute();
+        const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+        for (const el of Array.from(tc.vars.knownMediaElements || [])) {
+            // Clean up elements that have been removed from the DOM -- but
+            // keep tracking detached elements that are still playing. Sites
+            // detach their <video> during player rebuilds while playback
+            // continues; dropping those would freeze any fallback volume we
+            // applied and stop later state changes from reaching them.
+            if (!el.isConnected) {
+                if (!(isMediaPlaying(el) && isAudibleMediaElement(el))) {
+                    tc.vars.knownMediaElements.delete(el);
                 }
+                continue;
+            }
+            if (isPageAudioManaged(el)) {
+                if (el.dataset.vcFallback === 'true') clearFallbackVolume(el);
+                continue;
+            }
+
+            if (el.dataset.vcHooked === "true") {
+                if (routeNeeded && isMediaPlaying(el) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+                    tc.vars.audioCtx.resume().then(applyState);
+                }
+                continue;
+            }
+
+            if (tc.vars.muted && !routeNeeded) {
+                // Muted but no WebAudio route (e.g. fallback-only media):
+                // apply native element.muted so the OS can release audio.
+                applyFallbackVolume(el);
+            } else if (!routeNeeded && !tc.vars.isBlocked && gain < 1) {
+                applyFallbackVolume(el);
+            } else if (el.dataset.vcFallback === 'true') {
+                if (gain === 1 && !tc.vars.mono && !tc.vars.muted) clearFallbackVolume(el);
+                else applyFallbackVolume(el);
+            }
+
+            if (routeNeeded && isMediaPlaying(el) && isAudibleMediaElement(el)) {
+                connectOutput(el);
             }
         }
     } catch (e) {
         if (tc.settings.debugMode) log(`applyState fallback loop failed: ${e.message}`, 3);
     }
+
+    // Always schedule a suspend check, even when boost or mono is active.
+    // Previously this was gated on !needsAudioRoute(), which meant the context
+    // was never suspended while boost/mono was on — causing Bluetooth devices
+    // to stay active after playback paused.
+    setTimeout(suspendAudioContextIfIdle, 250);
 }
 
 function createGainNode() {
@@ -108,19 +845,244 @@ function createGainNode() {
     applyState();
 }
 
-function connectOutput(element) {
-    if (element.dataset.vcHooked === "true") return;
+function isMediaPlaying(element) {
+    return Boolean(element && !element.paused && !element.ended);
+}
 
-    if (!tc.vars.audioCtx) {
+function isAudibleMediaElement(element) {
+    try {
+        return Boolean(element && !element.muted && element.volume > 0);
+    } catch (e) {
+        return true;
+    }
+}
+
+let pageBridgeHeartbeatInterval = null;
+
+function ensurePageBridgeResync() {
+    if (pageBridgeResyncInterval !== null) return;
+    // The resync interval exists to heal any drift between our cached
+    // "last synced" state and the page hook's actual state (e.g. the hook
+    // reset itself after a heartbeat timeout). The skip-cache in
+    // syncPageAudioHook would defeat that purpose if we always skipped, so
+    // every 6th tick (~30s) we force a full state send.
+    let resyncCount = 0;
+    pageBridgeResyncInterval = setInterval(() => {
+        resyncCount++;
+        if (resyncCount % 6 === 0) lastSyncedPageAudioState = null;
+        syncPageAudioHook();
+    }, PAGE_BRIDGE_RESYNC_MS);
+}
+
+function ensurePageBridgeHeartbeat() {
+    if (pageBridgeHeartbeatInterval !== null) return;
+    // Send an initial heartbeat immediately so the page hook doesn't think
+    // we've gone away during the gap between script load and first sync.
+    sendPageAudioHeartbeat();
+    pageBridgeHeartbeatInterval = setInterval(sendPageAudioHeartbeat, PAGE_BRIDGE_HEARTBEAT_MS);
+}
+
+function suspendAudioContextIfIdle() {
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') return;
+    if (tc.vars.audioCtx.state !== 'running') return;
+
+    let isPlaying = false;
+    let hasHooked = false;
+    for (const el of tc.vars.mediaElements || []) {
+        // Clean up elements that have been removed from the DOM -- but keep
+        // detached elements that are still playing. Deleting a playing
+        // element here makes the isPlaying check below miss it, so the
+        // context gets suspended while its audio is still flowing
+        // (permanently silencing that element until the page is reloaded).
+        if (!el.isConnected) {
+            if (!(isMediaPlaying(el) && isAudibleMediaElement(el))) {
+                tc.vars.mediaElements.delete(el);
+                continue;
+            }
+        }
+        if (el.dataset.vcHooked === "true") hasHooked = true;
+        if (isMediaPlaying(el) && isAudibleMediaElement(el)) {
+            isPlaying = true;
+            break;
+        }
+    }
+
+    if (isPlaying) return;
+
+    // Suspend the context to release the OS audio device handle. Per the
+    // WebAudio spec, a suspended context releases the audio device in all
+    // major browsers (Chrome, Firefox, Safari), so suspend() is sufficient
+    // for Bluetooth idle without the irrecoverable state that close() creates.
+    //
+    // We deliberately do NOT close() even when no hooked media remains.
+    // close() would destroy any MediaElementSource routes still held, and
+    // those routes can only be created ONCE per element per context. If the
+    // page later re-adds a previously-hooked element (vcHooked still "true")
+    // and plays it, connectOutput's early return would skip source creation,
+    // and the element's audio would be piped to the dead source -> silence.
+    // suspend() preserves the routes so they can be rewired on resume.
+    //
+    // We also do NOT null tc.vars.audioCtx/gainNode: keeping the references
+    // alive lets already-hooked elements resume on the same context, and
+    // lets new elements reuse the suspended context instead of creating a
+    // wasteful new one.
+    try {
+        tc.vars.audioCtx.suspend();
+        if (tc.settings.debugMode) {
+            log(hasHooked
+                ? "audio context suspended (media paused) — device handle released"
+                : "audio context suspended (no hooked media) — device handle released", 4);
+        }
+    } catch (e) {
+        if (tc.settings.debugMode) log(`audio context suspend failed: ${e && e.message}`, 2);
+    }
+}
+
+function registerMediaElement(element) {
+    if (!element) return;
+    // Track all media elements (even page-managed ones) so applyState can
+    // iterate knownMediaElements instead of calling querySelectorAll.
+    if (tc.vars.knownMediaElements) tc.vars.knownMediaElements.add(element);
+
+    // Attach the encrypted listener BEFORE the page-managed early return
+    // below. The page-audio hook claims elements at creation time, so without
+    // this, hook-claimed DRM elements would rely solely on element.mediaKeys
+    // — which can land seconds after playback starts, leaving a window where
+    // the boost-limit verdict says "unrestricted" while the media is DRM.
+    // The sticky dataset flag written here is shared with the hook's world.
+    try {
+        if (element.dataset && element.dataset.vcEncryptedWatched !== "true") {
+            element.dataset.vcEncryptedWatched = "true";
+            element.addEventListener('encrypted', () => {
+                try { element.dataset.vcRestrictedMedia = "true"; } catch (e) {}
+                // Invalidate boost limit cache since this element just became restricted.
+                invalidateBoostLimitCache();
+            }, { passive: true });
+        }
+    } catch (e) {}
+
+    if (isPageAudioManaged(element) || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
+
+    element.dataset.vcWatched = "true";
+
+    const hookIfPlaying = () => {
+        if (isPageAudioManaged(element)) {
+            if (element.dataset.vcFallback === 'true') clearFallbackVolume(element);
+            return;
+        }
+
+        if (tc.vars.isBlocked || !isMediaPlaying(element) || !isAudibleMediaElement(element)) {
+            setTimeout(suspendAudioContextIfIdle, 250);
+            return;
+        }
+
+        if (needsAudioRoute()) {
+            connectOutput(element);
+        } else if (getGainValue(tc.vars.dB) < 1 || element.dataset.vcFallback === 'true') {
+            applyFallbackVolume(element);
+        } else {
+            clearFallbackVolume(element);
+        }
+    };
+
+    element.addEventListener('play', hookIfPlaying, { passive: true });
+    element.addEventListener('playing', hookIfPlaying, { passive: true });
+    element.addEventListener('volumechange', hookIfPlaying, { passive: true });
+    // v6.14: re-run the routing decision at timeupdate cadence — the EME
+    // pending gate clears on playback progress (decryption proof), so a
+    // probed-but-clear page (Plex) routes within a couple hundred
+    // milliseconds of playback instead of a multi-second grace window.
+    // Cheap guards keep this a no-op for hooked/managed/restricted/
+    // non-suspect elements.
+    element.addEventListener('timeupdate', () => {
+        if (element.dataset.vcHooked === 'true' || isPageAudioManaged(element)) return;
+        if (!isPendingEmeSuspect(element)) return;
+        if (elementDrmEvidence(element)) return;
+        hookIfPlaying();
+    }, { passive: true });
+    // v6.14: a new source must re-earn its EME decryption proof.
+    element.addEventListener('emptied', () => resetEmePending(element), { passive: true });
+    const scheduleSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
+    for (const evt of ['pause', 'ended', 'emptied']) {
+        element.addEventListener(evt, scheduleSuspend, { passive: true });
+    }
+
+    hookIfPlaying();
+}
+
+function connectOutput(element) {
+    if (isPageAudioManaged(element)) {
+        if (element.dataset.vcFallback === "true") clearFallbackVolume(element);
+        return;
+    }
+
+    if (element.dataset.vcHooked === "true") {
+        if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
+        if (isMediaPlaying(element) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+            tc.vars.audioCtx.resume().then(applyState);
+        }
+        return;
+    }
+    if (!needsAudioRoute()) {
+        if (getGainValue(tc.vars.dB) < 1) applyFallbackVolume(element);
+        else clearFallbackVolume(element);
+        registerMediaElement(element);
+        return;
+    }
+    if (!isMediaPlaying(element) || !isAudibleMediaElement(element)) {
+        registerMediaElement(element);
+        return;
+    }
+
+    if (isLikelyCrossOriginMedia(element)) {
+        applyFallbackVolume(element, "cross-origin");
+        log(`Skipped WebAudio hook for cross-origin media: ${getMediaSourceUrl(element)}`, 3);
+        return;
+    }
+
+    // Never route DRM-protected media through our AudioContext on engines
+    // that silence protected audio (Chromium): browsers feed the WebAudio
+    // graph silence for protected content while the element's native output
+    // stays detached — the element would go permanently mute. On Gecko, DRM
+    // audio is routable but only once keys are attached. The pending-EME
+    // grace window is handled here too (shouldRefuseMediaRouting mirrors
+    // the hook's isLikelyDrmMedia). Use fallback (native) volume control.
+    if (shouldRefuseMediaRouting(element)) {
+        applyFallbackVolume(element, isProbablyProtectedMedia(element) ? "restricted" : "");
+        log(`Skipped WebAudio hook for DRM-restricted media: ${getMediaSourceUrl(element)}`, 3);
+        return;
+    }
+
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') {
+        // If the context was closed (e.g. the page itself called .close()
+        // on it, or a previous extension version closed it), create a fresh
+        // one. Note: any elements previously hooked on the old context have
+        // vcHooked="true" but their source is dead -- connectOutput's early
+        // return at the vcHooked check above means they cannot be re-hooked
+        // here (createMediaElementSource throws on second call). Those
+        // elements will fall back to native volume via applyFallbackVolume.
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const stateChangeHandler = () => {
+        tc.vars.audioCtx.onstatechange = () => {
+            // Guard against null: the context may be suspended/closed and
+            // tc.vars.audioCtx may be reassigned before this handler fires.
+            if (!tc.vars.audioCtx) return;
             if (tc.vars.audioCtx.state === 'running') applyState();
         };
-        tc.vars.audioCtx.onstatechange = stateChangeHandler;
-        tc.vars.audioCtx._stateChangeHandler = stateChangeHandler;
     }
 
     if (!tc.vars.gainNode) createGainNode();
+
+    // Ensure the tracking set exists
+    if (!tc.vars.mediaElements) tc.vars.mediaElements = new Set();
+
+    // Re-check immediately before createMediaElementSource to close the race
+    // window where page-audio-hook.js might have claimed the element between
+    // the top of connectOutput and here.
+    if (isPageAudioManaged(element)) {
+        applyFallbackVolume(element, "route-failed");
+        log("Skipped WebAudio hook (race): page-audio-hook took ownership", 3);
+        return;
+    }
 
     try {
         log(`Attempting hook: ${element.tagName} id=${element.id || ''} src=${element.currentSrc || element.src || ''}`, 4);
@@ -138,8 +1100,18 @@ function connectOutput(element) {
             try {
                 source = tc.vars.audioCtx.createMediaElementSource(element);
             } catch (e) {
-                // createMediaElementSource can fail if the element is already connected elsewhere or due to browser restrictions
-                log(`createMediaElementSource failed: ${e && e.message}`, 2);
+                // createMediaElementSource can fail if the element is already
+                // connected elsewhere (e.g., page-audio-hook or the page itself
+                // already created a source for it) or due to browser restrictions.
+                const msg = e && e.message ? e.message : String(e);
+                if (/already|InvalidState|has a source|already connected/i.test(msg)) {
+                    // Mark as page-managed so we don't keep retrying.
+                    try { element.dataset[PAGE_AUDIO_MANAGED_ATTR] = "true"; } catch (_) {}
+                    applyFallbackVolume(element, "route-failed");
+                    log(`createMediaElementSource already in use: ${msg}`, 3);
+                    return;
+                }
+                log(`createMediaElementSource failed: ${msg}`, 2);
                 source = null;
             }
         }
@@ -149,93 +1121,110 @@ function connectOutput(element) {
             tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
 
             element.dataset.vcHooked = "true";
-            // Remove any fallback adjustments we may have made earlier
-            if (element.dataset.vcFallback === 'true') {
-                try {
-                    if (element.__vc_originalVolume !== undefined) element.volume = element.__vc_originalVolume;
-                } catch (e) {}
-                delete element.__vc_originalVolume;
-                delete element.dataset.vcFallback;
+            tc.vars.mediaElements.add(element);
+
+            // Wake up the AudioContext when media starts playing
+            element.addEventListener('play', () => {
+                if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+                    tc.vars.audioCtx.resume().then(applyState);
+                }
+            });
+
+            // Suspend the AudioContext when media stops to release the Bluetooth lock
+            const checkSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
+            for (const evt of ['volumechange', 'pause', 'ended', 'emptied']) {
+                element.addEventListener(evt, checkSuspend, { passive: true });
             }
 
-            applyState();
+            // Remove any fallback adjustments we may have made earlier
+            clearFallbackVolume(element);
 
-            if (tc.settings.debugMode) element.style.border = "2px solid #00ff00";
-            else element.style.border = "";
+            applyState();
+            checkSuspend();
+
+            // Debug-only visuals. The non-debug branch used to clear
+            // element.style.border unconditionally, wiping inline borders the
+            // SITE had styled its player with. Only ever remove a border WE
+            // painted (tracked via dataset), never the site's own styling.
+            if (tc.settings.debugMode) {
+                element.style.border = "2px solid #00ff00";
+                element.dataset.vcDebugBorder = 'true';
+            } else if (element.dataset.vcDebugBorder === 'true') {
+                element.style.border = "";
+                delete element.dataset.vcDebugBorder;
+            }
             log("Hook Success!", 4);
         } else {
             // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
-            if (element.dataset.vcFallback !== 'true') {
-                try {
-                    element.__vc_originalVolume = element.volume;
-                } catch (e) {}
-                element.dataset.vcFallback = 'true';
-            }
-            // Apply current state to fallback element
-            try {
-                const gain = getGainValue(tc.vars.dB);
-                // map gain to 0..1 for element.volume (best-effort)
-                const newVol = Math.min(1, Math.max(0, gain));
-                element.volume = newVol;
-                if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
-            } catch (e) {
-                log(`Fallback volume set failed: ${e && e.message}`, 2);
-            }
+            applyFallbackVolume(element, "route-failed");
             log("Hook fallback applied (element.volume scaled)", 3);
         }
 
     } catch (e) {
         log(`connectOutput outer failure: ${e && e.message}`, 1);
+        applyFallbackVolume(element, "route-failed");
         if (tc.settings.debugMode) element.style.border = "5px solid red";
     }
-} 
+}
 
 function init() {
-    if (document.body.classList.contains("vc-init")) return;
+    if (!document.body) return false;
+    if (document.body.classList.contains("vc-init")) return true;
 
-    for (const el of document.querySelectorAll("audio, video")) connectOutput(el);
-
-    new MutationObserver(mutations => {
-        for (const m of mutations) {
-            for (const n of m.addedNodes) {
-                if (n.nodeType === 1) {
-                    if (n.tagName === 'AUDIO' || n.tagName === 'VIDEO') connectOutput(n);
-                    else if (n.querySelectorAll) for (const el of n.querySelectorAll('audio, video')) connectOutput(el);
-
-                    // Also check for media elements inside shadow roots (YouTube may use shadow DOM-ish patterns)
-                    try {
-                        if (n.shadowRoot && n.shadowRoot.querySelectorAll) {
-                            for (const el of n.shadowRoot.querySelectorAll('audio, video')) connectOutput(el);
-                        }
-                    } catch (e) {}
-                }
-            }
-        }
-    }).observe(document.body, { childList: true, subtree: true });
-
-    document.addEventListener('click', () => {
-        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') tc.vars.audioCtx.resume().then(applyState);
-    }, { passive: true });
+    for (const el of document.querySelectorAll("audio, video")) registerMediaElement(el);
 
     document.body.classList.add("vc-init");
+    return true;
 } 
 
+function initWhenReady() {
+    if (document.body) {
+        init();
+        try {
+            for (const el of document.querySelectorAll('audio, video')) {
+                registerMediaElement(el);
+            }
+        } catch (e) {
+            if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
+        }
+        return;
+    }
+
+    if (tc.vars.pendingInit) return;
+    tc.vars.pendingInit = true;
+    document.addEventListener('DOMContentLoaded', () => {
+        tc.vars.pendingInit = false;
+        initWhenReady();
+    }, { once: true });
+}
+
 function extractRootDomain(url) {
-    if (!url) return "";
-    let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0].split(':')[0];
-    return domain.toLowerCase();
+    return sharedExtractRootDomain(url, { fileValue: "file" });
 } 
 
 async function start() {
     if (!browserAPI) return;
 
-    return new Promise((resolve) => {
-        browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false }, (data) => {
-            if (browserAPI.runtime.lastError) {
-                resolve();
-                return;
+    try {
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, legacyTwitchDefaultsPurged: false });
+
+        // One-time migration (issue #69): V4-era builds seeded default
+        // blocklist entries with paths ("www.twitch.tv/*/clip/*",
+        // "clips.twitch.tv") into storage and never cleaned them up. After
+        // v6.11's www-stripping normalization they matched the whole
+        // twitch.tv site, silently deactivating the extension there.
+        if (!data.legacyTwitchDefaultsPurged) {
+            const purged = purgeLegacyDefaultBlocklist(data.fqdns || []);
+            data.fqdns = purged.list;
+            try {
+                await storageSet(Object.assign(
+                    purged.changed ? { fqdns: purged.list } : {},
+                    { legacyTwitchDefaultsPurged: true }
+                ));
+            } catch (e) {
+                if (tc.settings.debugMode) log(`legacy blocklist purge failed: ${e && e.message}`, 2);
             }
+        }
 
         if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
 
@@ -251,9 +1240,12 @@ async function start() {
             // Whitelist is derived from remembered sites (siteSettings)
             const remembered = Object.keys(data.siteSettings || {});
             if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
-            if (!remembered.some(d => currentDomain.includes(d))) blocked = true;
+            if (!getSiteSettingsKey(data.siteSettings || {}, currentDomain)) blocked = true;
         } else {
-            if (data.fqdns.some(d => currentDomain.includes(d))) blocked = true;
+            // Path-aware matching (issue #69): legacy path entries like
+            // "www.twitch.tv/*/clip/*" scope to their path and no longer
+            // block the whole domain.
+            if (isUrlBlockedByEntries(window.location.href, data.fqdns || [])) blocked = true;
         }
 
         // Debug: log final decision
@@ -262,79 +1254,78 @@ async function start() {
         // Ensure the content script's blocked flag reflects the current state (clear it when unblocked)
         tc.vars.isBlocked = blocked;
         if (blocked) {
+            applyState();
+            ensurePageBridgeResync();
+            ensurePageBridgeHeartbeat();
             return;
         }
 
-        if (data.siteSettings && data.siteSettings[currentDomain]) {
-            const s = data.siteSettings[currentDomain];
-            if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
+        const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
+        if (siteSettingsKey) {
+            const s = data.siteSettings[siteSettingsKey];
+            if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
             if (s.mono !== undefined) tc.vars.mono = s.mono;
+            // Restore the remembered mute too: "muted" is persisted as part of
+            // the remembered triple (and re-applied when the popup opens), so
+            // leaving it out here meant a remembered-muted site audibly played
+            // after every navigation until the popup happened to be opened.
+            if (s.muted !== undefined) tc.vars.muted = Boolean(s.muted);
         }
 
-        init();
-
-        // Also attempt to (re)hook any existing media elements immediately. This helps when a page
-        // was previously blocked and is now allowed — ensure a gain node/source gets created.
-        try {
-            for (const el of document.querySelectorAll('audio, video')) {
-                connectOutput(el);
-            }
-        } catch (e) {
-            if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
-        }
-        resolve();
-        });
-    });
+        applyState();
+        ensurePageBridgeResync();
+        ensurePageBridgeHeartbeat();
+        initWhenReady();
+    } catch (e) {
+        if (tc.settings.debugMode) log(`start() storage read failed: ${e && e.message}`, 2);
+    }
 }
 
-if (document.readyState === "loading") {
-    document.addEventListener('DOMContentLoaded', start);
-} else {
-    start();
-}
+setupBoostLimitObserver();
+start();
+
+// Listen for requests from the page-audio hook (e.g., when it reactivates
+// after a heartbeat timeout and needs the current state).
+window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const data = event.data;
+    if (!data || data.source !== PAGE_BRIDGE_TARGET || data.target !== PAGE_BRIDGE_SOURCE) return;
+
+    // The hook's aggregate page restriction (covers detached/shadow-DOM media
+    // the document scan cannot see) just appeared or cleared. Drop our cached
+    // verdict so the next state query reflects it immediately.
+    if (data.command === "pageRestrictionChanged") {
+        invalidateBoostLimitCache();
+        return;
+    }
+
+    if (data.command !== "requestState") return;
+
+    // Reset the sync skip-cache so the next syncPageAudioHook actually sends
+    // the state, even if it hasn't changed from our perspective.
+    lastSyncedPageAudioState = null;
+    syncPageAudioHook();
+});
 
 // Keep content script state in sync when settings change in the extension UI
 if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
-    let isUpdating = false;
     browserAPI.storage.onChanged.addListener((changes, area) => {
-        if (area !== 'local' || isUpdating) return;
+        if (area !== 'local') return;
 
         if (tc.settings.debugMode) log(`onChanged: keys=[${Object.keys(changes).join(',')}]`, 4);
 
-        // If whitelist/blacklist mode, lists, or remembered sites changed, re-evaluate whether this page should be blocked
-        if (changes.whitelistMode || changes.fqdns || changes.whitelist || changes.siteSettings) {
-            isUpdating = true;
-            start().finally(() => { isUpdating = false; });
-        }
-
-        // If per-site settings changed, apply them if they affect this domain
-        if (changes.siteSettings) {
-            const currentDomain = extractRootDomain(window.location.href);
-            browserAPI.storage.local.get({ siteSettings: {} }, (data) => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) return;
-                if (data.siteSettings && data.siteSettings[currentDomain]) {
-                    const s = data.siteSettings[currentDomain];
-                    if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
-                    if (s.mono !== undefined) tc.vars.mono = s.mono;
-                    if (tc.settings.debugMode) log(`siteSettings updated for ${currentDomain}: dB=${tc.vars.dB}, mono=${tc.vars.mono}`, 4);
-                    applyState();
-                    // Ensure audio nodes exist for any existing media elements
-                    try {
-                        init();
-                        for (const el of document.querySelectorAll('audio, video')) connectOutput(el);
-                        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') tc.vars.audioCtx.resume().then(applyState);
-                    } catch (e) {
-                        if (tc.settings.debugMode) log(`re-hook after siteSettings failed: ${e.message}`, 3);
-                    }
-                } else {
-                    if (tc.settings.debugMode) log('siteSettings change did not affect this domain', 4);
-                }
-            });
+        // Re-evaluate blocking and apply site settings in a single pass.
+        // Previously this called start() AND a separate siteSettings handler,
+        // causing double storage reads, double applyState() calls, and potential
+        // race conditions if the two reads completed in different orders.
+        if (changes.whitelistMode || changes.fqdns || changes.siteSettings) {
+            start();
         }
 
         // Update debug mode live
         if (changes.debugMode) {
             tc.settings.debugMode = !!changes.debugMode.newValue;
+            syncPageAudioHook();
         }
     });
-} 
+}

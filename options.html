@@ -51,9 +51,9 @@
 
     <div id="blocklistSection" class="card">
         <h2 id="listTitle">Blocked Sites</h2>
-        <span class="hint">The extension will be disabled on these specific domains.</span>
+        <span class="hint">The extension will be disabled on these specific domains. Optional path: <em>example.com/videos</em> blocks only that part; use <em>*</em> to match anything except <em>/</em>.</span>
         <div class="input-group">
-            <input type="text" id="newFqdn" placeholder="example.com" />
+            <input type="text" id="newFqdn" placeholder="example.com or example.com/videos/*" />
             <button id="addFqdn">Add Site</button>
         </div>
         <div id="fqdnList" class="list-container"></div>
@@ -61,7 +61,7 @@
 
     <div class="card">
         <h3>Remembered Settings</h3>
-        <span class="hint">Manage saved volume and mono settings for specific sites.</span>
+        <span class="hint">Manage saved volume, mono, and mute settings for specific sites.</span>
         <div class="input-group">
             <input type="text" id="newRememberedSite" placeholder="example.com" />
             <button id="addRemembered">Add Site</button>
@@ -76,6 +76,7 @@
         </div>
     </footer>
 
+    <script src="shared.js"></script>
     <script src="options.js"></script>
 </body>
 

@@ -1,4 +1,14 @@
 /* Base overrides not covered by shared.css */
+.hidden { display: none !important; }
+
+.volume-limit-note {
+    margin: 2px 0 8px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--color-text-muted, #666);
+    text-align: center;
+    padding: 0 16px;
+}
 html,
 body {
     width: 420px;
